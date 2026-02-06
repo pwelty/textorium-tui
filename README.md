@@ -89,6 +89,10 @@ On a 621-post Hugo site:
 
 Textorium also has a native Mac app with a table-based content browser, WYSIWYG editor, and visual metadata management. Free on the [App Store](https://apps.apple.com/app/textorium/id6740587828).
 
+## Author
+
+Built by [Paul Welty](https://paulwelty.com).
+
 ## License
 
 MIT
