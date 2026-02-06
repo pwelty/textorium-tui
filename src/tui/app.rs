@@ -11,7 +11,7 @@ use ratatui::{
     layout::{Constraint, Direction, Layout},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Cell, Paragraph, Row, Table},
+    widgets::{Block, Borders, Cell, Paragraph, Row, Table, Wrap},
     Frame, Terminal,
 };
 
@@ -292,11 +292,25 @@ fn ui(f: &mut Frame, app: &App) {
                     Some(serde_json::Value::Bool(b)) => b.to_string(),
                     Some(serde_json::Value::Number(n)) => n.to_string(),
                     Some(serde_json::Value::Array(arr)) => {
-                        // Format arrays nicely
                         let items: Vec<String> = arr.iter()
-                            .filter_map(|v| v.as_str().map(String::from))
+                            .map(|v| match v {
+                                serde_json::Value::String(s) => s.clone(),
+                                serde_json::Value::Object(obj) => {
+                                    let fields: Vec<String> = obj.iter()
+                                        .map(|(k, v)| format!("{}: {}", k, v))
+                                        .collect();
+                                    format!("{{{}}}", fields.join(", "))
+                                }
+                                other => other.to_string(),
+                            })
                             .collect();
                         format!("[{}]", items.join(", "))
+                    }
+                    Some(serde_json::Value::Object(obj)) => {
+                        let fields: Vec<String> = obj.iter()
+                            .map(|(k, v)| format!("{}: {}", k, v))
+                            .collect();
+                        format!("{{{}}}", fields.join(", "))
                     }
                     _ => "—".to_string(),
                 };
@@ -374,7 +388,9 @@ fn ui(f: &mut Frame, app: &App) {
             Style::default()
         });
 
-    let metadata = Paragraph::new(metadata_text).block(metadata_block);
+    let metadata = Paragraph::new(metadata_text)
+        .block(metadata_block)
+        .wrap(Wrap { trim: false });
     f.render_widget(metadata, right_chunks[0]);
 
     // Content pane
@@ -511,9 +527,17 @@ pub async fn run() -> Result<()> {
                                     keys.sort();
 
                                     if let Some(key) = keys.get(app.metadata_selected) {
-                                        // Update the value
+                                        // Update the value, preserving the original type
+                                        let original = actual_post.frontmatter.get(key);
                                         let new_value = if key == "draft" {
                                             serde_json::Value::Bool(app.edit_buffer == "true")
+                                        } else if matches!(original, Some(serde_json::Value::Array(_))) {
+                                            let items: Vec<serde_json::Value> = app.edit_buffer
+                                                .split(',')
+                                                .map(|s| serde_json::Value::String(s.trim().to_string()))
+                                                .filter(|v| v.as_str() != Some(""))
+                                                .collect();
+                                            serde_json::Value::Array(items)
                                         } else {
                                             serde_json::Value::String(app.edit_buffer.clone())
                                         };
@@ -521,10 +545,18 @@ pub async fn run() -> Result<()> {
                                         actual_post.frontmatter.insert(key.clone(), new_value);
 
                                         // Update struct fields for special keys
+                                        let parsed_list = || -> Vec<String> {
+                                            app.edit_buffer.split(',')
+                                                .map(|s| s.trim().to_string())
+                                                .filter(|s| !s.is_empty())
+                                                .collect()
+                                        };
                                         match key.as_str() {
                                             "title" => actual_post.title = app.edit_buffer.clone(),
                                             "draft" => actual_post.draft = app.edit_buffer == "true",
                                             "content_type" | "type" => actual_post.content_type = app.edit_buffer.clone(),
+                                            "tags" => actual_post.tags = parsed_list(),
+                                            "categories" => actual_post.categories = parsed_list(),
                                             _ => {}
                                         }
                                     }
@@ -622,13 +654,34 @@ pub async fn run() -> Result<()> {
                                     keys.sort();
 
                                     if let Some(key) = keys.get(app.metadata_selected) {
-                                        app.edit_buffer = match post.frontmatter.get(key) {
-                                            Some(serde_json::Value::String(s)) => s.clone(),
-                                            Some(serde_json::Value::Bool(b)) => b.to_string(),
-                                            Some(serde_json::Value::Number(n)) => n.to_string(),
-                                            _ => String::new(),
+                                        let value = post.frontmatter.get(key);
+
+                                        // Check for complex types that can't be safely inline-edited
+                                        let is_complex = match value {
+                                            Some(serde_json::Value::Array(arr)) => {
+                                                arr.iter().any(|v| !v.is_string())
+                                            }
+                                            Some(serde_json::Value::Object(_)) => true,
+                                            _ => false,
                                         };
-                                        app.edit_mode = true;
+
+                                        if is_complex {
+                                            app.status_message = format!("Complex field '{}' — edit in $EDITOR (Enter in content pane)", key);
+                                        } else {
+                                            app.edit_buffer = match value {
+                                                Some(serde_json::Value::String(s)) => s.clone(),
+                                                Some(serde_json::Value::Bool(b)) => b.to_string(),
+                                                Some(serde_json::Value::Number(n)) => n.to_string(),
+                                                Some(serde_json::Value::Array(arr)) => {
+                                                    arr.iter()
+                                                        .filter_map(|v| v.as_str().map(String::from))
+                                                        .collect::<Vec<_>>()
+                                                        .join(", ")
+                                                }
+                                                _ => String::new(),
+                                            };
+                                            app.edit_mode = true;
+                                        }
                                     }
                                 }
                             }
