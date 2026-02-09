@@ -6,15 +6,15 @@
 **Big Bet:** Someone installs via Homebrew and thinks "this is a real tool"
 
 ### Milestones
-- [ ] TUI on Homebrew (Target: Feb 21)
+- [ ] TUI on Homebrew (2026-02-21)
   Distribution pipeline complete: GitHub Actions builds, Homebrew tap, landing page updated. Already 86% done — remaining work is landing page updates (SYN-99, SYN-103).
-- [ ] Visual overhaul (Target: Feb 28)
+- [ ] Visual overhaul (2026-02-28)
   Better layout, colors, status indicators, responsive panes. The TUI should look polished, not like a prototype. Typography, alignment, and information density should feel intentional.
-- [ ] Bulletproof editing (Target: Feb 28)
+- [ ] Bulletproof editing (2026-02-28)
   Edge cases handled (arrays, nested frontmatter, empty fields). Undo support, confirmation on destructive actions, clear feedback on all operations. No data loss scenarios.
-- [ ] CLI essentials (Target: Mar 15)
+- [ ] CLI essentials (2026-03-15)
   `textorium new "Title"` and `textorium list` working end-to-end. These are the two commands someone would actually use alongside the TUI.
-- [ ] First external user (Target: Mar 31)
+- [ ] First external user (2026-03-31)
   Someone outside the author installs it, uses it on their site, and gives feedback. Real validation that the tool delivers value.
 
 ### Why this quarter
@@ -31,10 +31,10 @@ The through-line: distribute (Homebrew) → polish (visual + editing) → extend
 **Big Bet:** Textorium becomes faster than any other way to manage a static site
 
 ### Open questions
-- [ ] What workflows do external users actually want?
-- [ ] Should `textorium serve` and `textorium build` wrap SSG commands?
-- [ ] Is there demand for bulk operations (batch publish, batch tag)?
-- [ ] Does the macOS app need feature parity, or do they serve different users?
+- What workflows do external users actually want?
+- Should `textorium serve` and `textorium build` wrap SSG commands?
+- Is there demand for bulk operations (batch publish, batch tag)?
+- Does the macOS app need feature parity, or do they serve different users?
 
 ---
 

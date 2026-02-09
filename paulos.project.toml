@@ -1,0 +1,24 @@
+[project]
+slug = "textorium-tui"
+name = "textorium-tui"
+vision_file = "PRODUCT.md"
+roadmap_file = "ROADMAP.md"
+todo_file = "TODO.md"
+
+[tasks]
+provider = "github"
+
+[github]
+owner = "pwelty"
+repo = "textorium-tui"
+in_progress_label = "in-progress"
+
+[notion]
+product_page_id = ""
+product_name = "textorium-tui"
+docs_root_url = ""
+
+[policy]
+roadmap_todo_backup_only = true
+enforce_name_match = true
+require_product_md = true
