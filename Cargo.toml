@@ -45,6 +45,9 @@ regex = "1.11"
 # Config and storage
 directories = "5.0"
 
+# Cross-platform URL opening
+open = "5"
+
 [dev-dependencies]
 tempfile = "3.14"
 
