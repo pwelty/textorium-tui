@@ -130,6 +130,37 @@ impl App {
         self.selected = 0;
     }
 
+    fn empty_state_message(&self) -> Option<String> {
+        if !self.posts.is_empty() {
+            return None;
+        }
+
+        if self.config.site_path.is_empty() {
+            return Some("No site configured. Run: textorium use <path>".to_string());
+        }
+
+        let site_path = std::path::Path::new(&self.config.site_path);
+        if !site_path.exists() {
+            return Some(format!(
+                "Site path not found: {}",
+                self.config.site_path
+            ));
+        }
+
+        let content_path = self.config.content_path();
+        if !content_path.exists() {
+            return Some(format!(
+                "Content directory not found: {}",
+                content_path.display()
+            ));
+        }
+
+        Some(format!(
+            "No markdown files found in {}",
+            content_path.display()
+        ))
+    }
+
     fn open_in_editor(&self) -> Result<()> {
         let filtered = self.get_filtered_posts();
         if let Some(post) = filtered.get(self.selected) {
@@ -274,9 +305,26 @@ fn ui(f: &mut Frame, app: &App) {
         Constraint::Length(8),
     ];
 
-    let posts_table = Table::new(rows, widths).header(header).block(posts_block);
+    // Show empty state message or posts table
+    if filtered_posts.is_empty() {
+        let message = if !app.search_query.is_empty() {
+            format!("No posts match \"{}\"", app.search_query)
+        } else if app.drafts_only {
+            "No draft posts found".to_string()
+        } else {
+            app.empty_state_message()
+                .unwrap_or_else(|| "No posts found".to_string())
+        };
 
-    f.render_widget(posts_table, chunks[0]);
+        let empty_state = Paragraph::new(message)
+            .block(posts_block)
+            .style(Style::default().fg(Color::DarkGray))
+            .wrap(Wrap { trim: false });
+        f.render_widget(empty_state, chunks[0]);
+    } else {
+        let posts_table = Table::new(rows, widths).header(header).block(posts_block);
+        f.render_widget(posts_table, chunks[0]);
+    }
 
     // Metadata pane
     let selected_post = filtered_posts.get(app.selected);
