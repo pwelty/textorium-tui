@@ -19,6 +19,10 @@ pub struct Post {
     pub tags: Vec<String>,
     pub content: String,
     pub frontmatter: HashMap<String, serde_json::Value>,
+    /// Raw YAML text between --- delimiters, preserved for lossless save
+    pub raw_frontmatter: String,
+    /// Snapshot of frontmatter at load time, used to detect changes on save
+    pub original_frontmatter: HashMap<String, serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -42,15 +46,20 @@ struct Frontmatter {
 }
 
 /// Parse frontmatter and body from markdown content
-fn parse_frontmatter(content: &str) -> Result<(HashMap<String, serde_json::Value>, String)> {
+/// Returns (parsed HashMap, body text, raw YAML text between --- delimiters)
+fn parse_frontmatter(
+    content: &str,
+) -> Result<(HashMap<String, serde_json::Value>, String, String)> {
     if !content.starts_with("---") {
-        return Ok((HashMap::new(), content.to_string()));
+        return Ok((HashMap::new(), content.to_string(), String::new()));
     }
 
     let parts: Vec<&str> = content.splitn(3, "---").collect();
     if parts.len() < 3 {
-        return Ok((HashMap::new(), content.to_string()));
+        return Ok((HashMap::new(), content.to_string(), String::new()));
     }
+
+    let raw_yaml = parts[1].to_string();
 
     let frontmatter: Frontmatter =
         serde_yaml::from_str(parts[1]).context("Failed to parse YAML frontmatter")?;
@@ -105,7 +114,7 @@ fn parse_frontmatter(content: &str) -> Result<(HashMap<String, serde_json::Value
         fm_map.insert(key, value);
     }
 
-    Ok((fm_map, body))
+    Ok((fm_map, body, raw_yaml))
 }
 
 /// Read a single post from a file
@@ -113,7 +122,7 @@ pub fn read_post(path: &Path) -> Result<Post> {
     let content = fs::read_to_string(path)
         .with_context(|| format!("Failed to read post: {}", path.display()))?;
 
-    let (frontmatter, body) = parse_frontmatter(&content)?;
+    let (frontmatter, body, raw_yaml) = parse_frontmatter(&content)?;
 
     // Extract fields
     let title = frontmatter
@@ -177,7 +186,9 @@ pub fn read_post(path: &Path) -> Result<Post> {
         categories,
         tags,
         content: body,
+        original_frontmatter: frontmatter.clone(),
         frontmatter,
+        raw_frontmatter: raw_yaml,
     })
 }
 
@@ -220,21 +231,271 @@ pub fn scan_posts(config: &Config) -> Result<Vec<Post>> {
     Ok(posts)
 }
 
-/// Save a post back to disk
+/// Serialize a serde_json::Value as inline YAML suitable for frontmatter
+fn value_to_yaml_inline(value: &serde_json::Value) -> String {
+    match value {
+        serde_json::Value::String(s) => {
+            // Quote strings that contain special YAML characters
+            if s.contains(':')
+                || s.contains('#')
+                || s.contains('[')
+                || s.contains(']')
+                || s.contains('{')
+                || s.contains('}')
+                || s.contains(',')
+                || s.contains('&')
+                || s.contains('*')
+                || s.contains('!')
+                || s.contains('|')
+                || s.contains('>')
+                || s.contains('\'')
+                || s.contains('\n')
+                || s.starts_with(' ')
+                || s.ends_with(' ')
+            {
+                format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\""))
+            } else {
+                s.clone()
+            }
+        }
+        serde_json::Value::Bool(b) => b.to_string(),
+        serde_json::Value::Number(n) => n.to_string(),
+        serde_json::Value::Array(arr) => {
+            let items: Vec<String> = arr.iter().map(value_to_yaml_inline).collect();
+            format!("[{}]", items.join(", "))
+        }
+        serde_json::Value::Object(_) | serde_json::Value::Null => {
+            // Fall back to serde_yaml for complex types
+            serde_yaml::to_string(value)
+                .unwrap_or_default()
+                .trim()
+                .to_string()
+        }
+    }
+}
+
+/// Find the line range for a top-level YAML key in raw frontmatter lines.
+/// Returns (start_index, end_index_exclusive) or None if not found.
+fn find_key_lines(lines: &[&str], key: &str) -> Option<(usize, usize)> {
+    let prefix = format!("{}:", key);
+    let start = lines.iter().position(|line| {
+        let trimmed = line.trim();
+        trimmed == prefix || trimmed.starts_with(&format!("{}: ", key))
+    })?;
+
+    // Find end: next top-level key or end of lines
+    let end = lines[start + 1..]
+        .iter()
+        .position(|line| {
+            let trimmed = line.trim();
+            !trimmed.is_empty()
+                && !line.starts_with(' ')
+                && !line.starts_with('\t')
+                && !trimmed.starts_with('-')
+        })
+        .map(|pos| start + 1 + pos)
+        .unwrap_or(lines.len());
+
+    Some((start, end))
+}
+
+/// Save a post back to disk, preserving original frontmatter formatting where possible
 pub fn save_post(post: &Post) -> Result<()> {
-    // Reconstruct frontmatter
-    let mut fm_lines = vec!["---".to_string()];
+    // If frontmatter is unchanged, write back the original file exactly
+    if post.frontmatter == post.original_frontmatter {
+        let full_content = format!("---{}---\n\n{}\n", post.raw_frontmatter, post.content);
+        fs::write(&post.path, full_content)
+            .with_context(|| format!("Failed to write post: {}", post.path.display()))?;
+        return Ok(());
+    }
 
-    // Serialize frontmatter map as YAML
-    let yaml_str = serde_yaml::to_string(&post.frontmatter)?;
-    fm_lines.push(yaml_str.trim().to_string());
-    fm_lines.push("---".to_string());
+    // Frontmatter was modified — patch the raw YAML
+    let raw_lines: Vec<&str> = post.raw_frontmatter.lines().collect();
+    let mut result_lines: Vec<String> = Vec::new();
+    let mut processed_keys: std::collections::HashSet<String> = std::collections::HashSet::new();
 
-    // Combine with content
-    let full_content = format!("{}\n\n{}", fm_lines.join("\n"), post.content);
+    // Process existing lines, replacing modified values and skipping deleted keys
+    let mut i = 0;
+    while i < raw_lines.len() {
+        let line = raw_lines[i];
+        let trimmed = line.trim();
+
+        // Check if this is a top-level key line
+        if !trimmed.is_empty()
+            && !line.starts_with(' ')
+            && !line.starts_with('\t')
+            && !trimmed.starts_with('-')
+        {
+            if let Some(colon_pos) = trimmed.find(':') {
+                let key = trimmed[..colon_pos].to_string();
+
+                if let Some((start, end)) = find_key_lines(&raw_lines, &key) {
+                    if start == i {
+                        processed_keys.insert(key.clone());
+
+                        if let Some(new_value) = post.frontmatter.get(&key) {
+                            // Key still exists — check if value changed
+                            let original_value = post.original_frontmatter.get(&key);
+                            if original_value == Some(new_value) {
+                                // Unchanged — keep original lines
+                                for line in &raw_lines[start..end] {
+                                    result_lines.push(line.to_string());
+                                }
+                            } else {
+                                // Changed — write new value inline
+                                result_lines.push(format!(
+                                    "{}: {}",
+                                    key,
+                                    value_to_yaml_inline(new_value)
+                                ));
+                            }
+                            i = end;
+                            continue;
+                        } else {
+                            // Key was deleted — skip all its lines
+                            i = end;
+                            continue;
+                        }
+                    }
+                }
+            }
+        }
+
+        // Not a top-level key or not matched — keep the line as-is
+        result_lines.push(line.to_string());
+        i += 1;
+    }
+
+    // Append any new keys that weren't in the original
+    for (key, value) in &post.frontmatter {
+        if !processed_keys.contains(key) && !post.original_frontmatter.contains_key(key) {
+            result_lines.push(format!("{}: {}", key, value_to_yaml_inline(value)));
+        }
+    }
+
+    // Reconstruct the file
+    let frontmatter_text = result_lines.join("\n");
+    let full_content = format!("---\n{}\n---\n\n{}\n", frontmatter_text, post.content);
 
     fs::write(&post.path, full_content)
         .with_context(|| format!("Failed to write post: {}", post.path.display()))?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    fn create_temp_post(content: &str) -> NamedTempFile {
+        let mut f = NamedTempFile::new().unwrap();
+        f.write_all(content.as_bytes()).unwrap();
+        f.flush().unwrap();
+        f
+    }
+
+    #[test]
+    fn test_save_unchanged_post_is_byte_identical() {
+        let original = "---\ntitle: My post\ndate: 2025-01-15\ndraft: false\ntags: [rust, tui]\ncategories: [dev]\n---\n\nHello world.\n";
+        let f = create_temp_post(original);
+        let post = read_post(f.path()).unwrap();
+
+        save_post(&post).unwrap();
+
+        let saved = fs::read_to_string(f.path()).unwrap();
+        assert_eq!(
+            saved, original,
+            "Unchanged post should be byte-identical after save"
+        );
+    }
+
+    #[test]
+    fn test_save_preserves_field_order_on_edit() {
+        let original = "---\ntitle: Original title\ndate: 2025-01-15\ndraft: true\ntags: [a, b]\n---\n\nBody text.\n";
+        let f = create_temp_post(original);
+        let mut post = read_post(f.path()).unwrap();
+
+        // Change the title
+        post.frontmatter.insert(
+            "title".to_string(),
+            serde_json::Value::String("New title".to_string()),
+        );
+
+        save_post(&post).unwrap();
+
+        let saved = fs::read_to_string(f.path()).unwrap();
+        // Title should come before date (preserved order)
+        let title_pos = saved.find("title:").unwrap();
+        let date_pos = saved.find("date:").unwrap();
+        assert!(
+            title_pos < date_pos,
+            "Field order should be preserved after edit"
+        );
+        assert!(saved.contains("title: New title"));
+        assert!(saved.contains("date: 2025-01-15"));
+    }
+
+    #[test]
+    fn test_save_only_modifies_changed_fields() {
+        let original =
+            "---\ntitle: My post\ndate: 2025-01-15T10:00:00Z\ndraft: false\n---\n\nContent here.\n";
+        let f = create_temp_post(original);
+        let mut post = read_post(f.path()).unwrap();
+
+        // Change only draft
+        post.frontmatter
+            .insert("draft".to_string(), serde_json::Value::Bool(true));
+
+        save_post(&post).unwrap();
+
+        let saved = fs::read_to_string(f.path()).unwrap();
+        // Original date format should be preserved exactly
+        assert!(
+            saved.contains("date: 2025-01-15T10:00:00Z"),
+            "Unchanged fields should be preserved exactly"
+        );
+        assert!(saved.contains("draft: true"), "Changed field should update");
+    }
+
+    #[test]
+    fn test_save_handles_added_fields() {
+        let original = "---\ntitle: My post\n---\n\nBody.\n";
+        let f = create_temp_post(original);
+        let mut post = read_post(f.path()).unwrap();
+
+        post.frontmatter.insert(
+            "author".to_string(),
+            serde_json::Value::String("Paul".to_string()),
+        );
+
+        save_post(&post).unwrap();
+
+        let saved = fs::read_to_string(f.path()).unwrap();
+        assert!(
+            saved.contains("author: Paul"),
+            "New field should be appended"
+        );
+        assert!(
+            saved.contains("title: My post"),
+            "Existing fields preserved"
+        );
+    }
+
+    #[test]
+    fn test_save_handles_deleted_fields() {
+        let original = "---\ntitle: My post\nauthor: Paul\ndraft: false\n---\n\nBody.\n";
+        let f = create_temp_post(original);
+        let mut post = read_post(f.path()).unwrap();
+
+        post.frontmatter.remove("author");
+
+        save_post(&post).unwrap();
+
+        let saved = fs::read_to_string(f.path()).unwrap();
+        assert!(!saved.contains("author"), "Deleted field should be removed");
+        assert!(saved.contains("title: My post"));
+        assert!(saved.contains("draft: false"));
+    }
 }
