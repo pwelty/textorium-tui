@@ -4,8 +4,6 @@ use crossterm::{
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
-use std::io;
-use std::process::Command;
 use ratatui::{
     backend::CrosstermBackend,
     layout::{Constraint, Direction, Layout},
@@ -14,25 +12,30 @@ use ratatui::{
     widgets::{Block, Borders, Cell, Paragraph, Row, Table, Wrap},
     Frame, Terminal,
 };
+use std::io;
+use std::process::Command;
 
-use crate::core::{config::Config, posts::{save_post, scan_posts, Post}};
+use crate::core::{
+    config::Config,
+    posts::{save_post, scan_posts, Post},
+};
 
 pub struct App {
     config: Config,
     posts: Vec<Post>,
     selected: usize,
-    focused_pane: usize, // 0=posts, 1=metadata, 2=content
+    focused_pane: usize,      // 0=posts, 1=metadata, 2=content
     metadata_selected: usize, // Selected field in metadata pane
-    content_scroll: usize, // Scroll offset in content pane
+    content_scroll: usize,    // Scroll offset in content pane
     search_query: String,
     search_mode: bool,
     sort_mode: SortMode,
     drafts_only: bool,
-    edit_mode: bool, // Whether we're editing a metadata field
-    edit_buffer: String, // Buffer for editing metadata values
+    edit_mode: bool,        // Whether we're editing a metadata field
+    edit_buffer: String,    // Buffer for editing metadata values
     status_message: String, // Status bar message
-    adding_field: bool, // Whether we're adding a new field
-    new_field_key: String, // Key name for new field being added
+    adding_field: bool,     // Whether we're adding a new field
+    new_field_key: String,  // Key name for new field being added
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -82,7 +85,9 @@ impl App {
             filtered.retain(|p| {
                 p.title.to_lowercase().contains(&query)
                     || p.content.to_lowercase().contains(&query)
-                    || p.categories.iter().any(|c| c.to_lowercase().contains(&query))
+                    || p.categories
+                        .iter()
+                        .any(|c| c.to_lowercase().contains(&query))
             });
         }
 
@@ -147,17 +152,11 @@ impl App {
             )?;
 
             // Open editor with proper terminal control
-            let status = Command::new(&editor)
-                .arg(&post.path)
-                .status()?;
+            let status = Command::new(&editor).arg(&post.path).status()?;
 
             // Re-enter TUI mode
             enable_raw_mode()?;
-            execute!(
-                io::stdout(),
-                EnterAlternateScreen,
-                EnableMouseCapture
-            )?;
+            execute!(io::stdout(), EnterAlternateScreen, EnableMouseCapture)?;
 
             if status.success() {
                 return Ok(());
@@ -209,7 +208,8 @@ fn ui(f: &mut Frame, app: &App) {
         .iter()
         .enumerate()
         .map(|(i, post)| {
-            let date = post.date
+            let date = post
+                .date
                 .map(|d| d.format("%Y-%m-%d").to_string())
                 .unwrap_or_else(|| "—".to_string());
 
@@ -237,8 +237,16 @@ fn ui(f: &mut Frame, app: &App) {
         .collect();
 
     let posts_title = {
-        let focus = if app.focused_pane == 0 { " [FOCUSED]" } else { "" };
-        let filter = if app.drafts_only { " [DRAFTS ONLY]" } else { "" };
+        let focus = if app.focused_pane == 0 {
+            " [FOCUSED]"
+        } else {
+            ""
+        };
+        let filter = if app.drafts_only {
+            " [DRAFTS ONLY]"
+        } else {
+            ""
+        };
         let search = if !app.search_query.is_empty() {
             format!(" [SEARCH: \"{}\"]", app.search_query)
         } else {
@@ -252,7 +260,9 @@ fn ui(f: &mut Frame, app: &App) {
         .borders(Borders::ALL)
         .title(posts_title)
         .border_style(if app.focused_pane == 0 {
-            Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD)
         } else {
             Style::default()
         });
@@ -264,9 +274,7 @@ fn ui(f: &mut Frame, app: &App) {
         Constraint::Length(8),
     ];
 
-    let posts_table = Table::new(rows, widths)
-        .header(header)
-        .block(posts_block);
+    let posts_table = Table::new(rows, widths).header(header).block(posts_block);
 
     f.render_widget(posts_table, chunks[0]);
 
@@ -292,13 +300,13 @@ fn ui(f: &mut Frame, app: &App) {
                     Some(serde_json::Value::Bool(b)) => b.to_string(),
                     Some(serde_json::Value::Number(n)) => n.to_string(),
                     Some(serde_json::Value::Array(arr)) => {
-                        let items: Vec<String> = arr.iter()
+                        let items: Vec<String> = arr
+                            .iter()
                             .map(|v| match v {
                                 serde_json::Value::String(s) => s.clone(),
                                 serde_json::Value::Object(obj) => {
-                                    let fields: Vec<String> = obj.iter()
-                                        .map(|(k, v)| format!("{}: {}", k, v))
-                                        .collect();
+                                    let fields: Vec<String> =
+                                        obj.iter().map(|(k, v)| format!("{}: {}", k, v)).collect();
                                     format!("{{{}}}", fields.join(", "))
                                 }
                                 other => other.to_string(),
@@ -307,20 +315,20 @@ fn ui(f: &mut Frame, app: &App) {
                         format!("[{}]", items.join(", "))
                     }
                     Some(serde_json::Value::Object(obj)) => {
-                        let fields: Vec<String> = obj.iter()
-                            .map(|(k, v)| format!("{}: {}", k, v))
-                            .collect();
+                        let fields: Vec<String> =
+                            obj.iter().map(|(k, v)| format!("{}: {}", k, v)).collect();
                         format!("{{{}}}", fields.join(", "))
                     }
                     _ => "—".to_string(),
                 };
 
                 // If we're editing this field, show the edit buffer
-                let display_value = if app.edit_mode && app.focused_pane == 1 && i == app.metadata_selected {
-                    format!("{}_", app.edit_buffer) // Add cursor
-                } else {
-                    value
-                };
+                let display_value =
+                    if app.edit_mode && app.focused_pane == 1 && i == app.metadata_selected {
+                        format!("{}_", app.edit_buffer) // Add cursor
+                    } else {
+                        value
+                    };
 
                 // Color based on key
                 let color = match key.as_str() {
@@ -356,12 +364,18 @@ fn ui(f: &mut Frame, app: &App) {
             if app.new_field_key.is_empty() {
                 Line::from(vec![
                     Span::raw(marker),
-                    Span::styled(format!("key: {}_", app.edit_buffer), Style::default().fg(Color::Gray)),
+                    Span::styled(
+                        format!("key: {}_", app.edit_buffer),
+                        Style::default().fg(Color::Gray),
+                    ),
                 ])
             } else {
                 Line::from(vec![
                     Span::raw(marker),
-                    Span::styled(format!("{}: {}_", app.new_field_key, app.edit_buffer), Style::default().fg(Color::Gray)),
+                    Span::styled(
+                        format!("{}: {}_", app.new_field_key, app.edit_buffer),
+                        Style::default().fg(Color::Gray),
+                    ),
                 ])
             }
         } else {
@@ -383,7 +397,9 @@ fn ui(f: &mut Frame, app: &App) {
         .borders(Borders::ALL)
         .title(metadata_title)
         .border_style(if app.focused_pane == 1 {
-            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD)
         } else {
             Style::default()
         });
@@ -413,7 +429,9 @@ fn ui(f: &mut Frame, app: &App) {
         .borders(Borders::ALL)
         .title(content_title)
         .border_style(if app.focused_pane == 2 {
-            Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD)
+            Style::default()
+                .fg(Color::Magenta)
+                .add_modifier(Modifier::BOLD)
         } else {
             Style::default()
         });
@@ -425,14 +443,16 @@ fn ui(f: &mut Frame, app: &App) {
     let status_text = if !app.status_message.is_empty() {
         app.status_message.clone()
     } else if app.search_mode {
-        format!("Search mode - Type to filter | Enter/Esc: exit search | {} matches", app.get_filtered_posts().len())
+        format!(
+            "Search mode - Type to filter | Enter/Esc: exit search | {} matches",
+            app.get_filtered_posts().len()
+        )
     } else if app.focused_pane == 1 {
         "q: quit | j/k: navigate | Enter: edit/add | d: delete field | Ctrl+S: save | Tab: switch panes | s: sort | f: filter | /: search | o: preview | r: refresh".to_string()
     } else {
         "q: quit | j/k: navigate | Tab/h/l: switch panes | Enter: edit (meta) or open editor (content) | Ctrl+S: save | s: sort | f: filter | /: search | o: preview | r: refresh".to_string()
     };
-    let status_bar = Paragraph::new(status_text)
-        .style(Style::default().fg(Color::Gray));
+    let status_bar = Paragraph::new(status_text).style(Style::default().fg(Color::Gray));
     f.render_widget(status_bar, main_chunks[1]);
 }
 
@@ -499,10 +519,12 @@ pub async fn run() -> Result<()> {
                                 };
 
                                 if let Some(path) = post_path {
-                                    if let Some(actual_post) = app.posts.iter_mut().find(|p| p.path == path) {
+                                    if let Some(actual_post) =
+                                        app.posts.iter_mut().find(|p| p.path == path)
+                                    {
                                         actual_post.frontmatter.insert(
                                             app.new_field_key.clone(),
-                                            serde_json::Value::String(app.edit_buffer.clone())
+                                            serde_json::Value::String(app.edit_buffer.clone()),
                                         );
                                     }
                                 }
@@ -521,9 +543,12 @@ pub async fn run() -> Result<()> {
 
                             if let Some(path) = post_path {
                                 // Find the actual post in the posts vec
-                                if let Some(actual_post) = app.posts.iter_mut().find(|p| p.path == path) {
+                                if let Some(actual_post) =
+                                    app.posts.iter_mut().find(|p| p.path == path)
+                                {
                                     // Get the field key being edited
-                                    let mut keys: Vec<String> = actual_post.frontmatter.keys().cloned().collect();
+                                    let mut keys: Vec<String> =
+                                        actual_post.frontmatter.keys().cloned().collect();
                                     keys.sort();
 
                                     if let Some(key) = keys.get(app.metadata_selected) {
@@ -531,10 +556,16 @@ pub async fn run() -> Result<()> {
                                         let original = actual_post.frontmatter.get(key);
                                         let new_value = if key == "draft" {
                                             serde_json::Value::Bool(app.edit_buffer == "true")
-                                        } else if matches!(original, Some(serde_json::Value::Array(_))) {
-                                            let items: Vec<serde_json::Value> = app.edit_buffer
+                                        } else if matches!(
+                                            original,
+                                            Some(serde_json::Value::Array(_))
+                                        ) {
+                                            let items: Vec<serde_json::Value> = app
+                                                .edit_buffer
                                                 .split(',')
-                                                .map(|s| serde_json::Value::String(s.trim().to_string()))
+                                                .map(|s| {
+                                                    serde_json::Value::String(s.trim().to_string())
+                                                })
                                                 .filter(|v| v.as_str() != Some(""))
                                                 .collect();
                                             serde_json::Value::Array(items)
@@ -546,15 +577,20 @@ pub async fn run() -> Result<()> {
 
                                         // Update struct fields for special keys
                                         let parsed_list = || -> Vec<String> {
-                                            app.edit_buffer.split(',')
+                                            app.edit_buffer
+                                                .split(',')
                                                 .map(|s| s.trim().to_string())
                                                 .filter(|s| !s.is_empty())
                                                 .collect()
                                         };
                                         match key.as_str() {
                                             "title" => actual_post.title = app.edit_buffer.clone(),
-                                            "draft" => actual_post.draft = app.edit_buffer == "true",
-                                            "content_type" | "type" => actual_post.content_type = app.edit_buffer.clone(),
+                                            "draft" => {
+                                                actual_post.draft = app.edit_buffer == "true"
+                                            }
+                                            "content_type" | "type" => {
+                                                actual_post.content_type = app.edit_buffer.clone()
+                                            }
                                             "tags" => actual_post.tags = parsed_list(),
                                             "categories" => actual_post.categories = parsed_list(),
                                             _ => {}
@@ -584,10 +620,13 @@ pub async fn run() -> Result<()> {
                         let filtered = app.get_filtered_posts();
                         if let Some(post) = filtered.get(app.selected) {
                             // Find the actual post in posts vec
-                            if let Some(actual_post) = app.posts.iter().find(|p| p.path == post.path) {
+                            if let Some(actual_post) =
+                                app.posts.iter().find(|p| p.path == post.path)
+                            {
                                 match save_post(actual_post) {
                                     Ok(_) => {
-                                        app.status_message = format!("✓ Saved: {}", actual_post.path.display());
+                                        app.status_message =
+                                            format!("✓ Saved: {}", actual_post.path.display());
                                     }
                                     Err(e) => {
                                         app.status_message = format!("✗ Error saving: {}", e);
@@ -650,7 +689,8 @@ pub async fn run() -> Result<()> {
                                     app.new_field_key.clear();
                                 } else {
                                     // Edit existing field
-                                    let mut keys: Vec<String> = post.frontmatter.keys().cloned().collect();
+                                    let mut keys: Vec<String> =
+                                        post.frontmatter.keys().cloned().collect();
                                     keys.sort();
 
                                     if let Some(key) = keys.get(app.metadata_selected) {
@@ -672,12 +712,11 @@ pub async fn run() -> Result<()> {
                                                 Some(serde_json::Value::String(s)) => s.clone(),
                                                 Some(serde_json::Value::Bool(b)) => b.to_string(),
                                                 Some(serde_json::Value::Number(n)) => n.to_string(),
-                                                Some(serde_json::Value::Array(arr)) => {
-                                                    arr.iter()
-                                                        .filter_map(|v| v.as_str().map(String::from))
-                                                        .collect::<Vec<_>>()
-                                                        .join(", ")
-                                                }
+                                                Some(serde_json::Value::Array(arr)) => arr
+                                                    .iter()
+                                                    .filter_map(|v| v.as_str().map(String::from))
+                                                    .collect::<Vec<_>>()
+                                                    .join(", "),
                                                 _ => String::new(),
                                             };
                                             app.edit_mode = true;
@@ -704,7 +743,11 @@ pub async fn run() -> Result<()> {
                         app.content_scroll = 0;
                     }
                     KeyCode::BackTab | KeyCode::Char('h') | KeyCode::Left => {
-                        app.focused_pane = if app.focused_pane == 0 { 2 } else { app.focused_pane - 1 };
+                        app.focused_pane = if app.focused_pane == 0 {
+                            2
+                        } else {
+                            app.focused_pane - 1
+                        };
                         app.metadata_selected = 0;
                         app.content_scroll = 0;
                     }
@@ -717,8 +760,11 @@ pub async fn run() -> Result<()> {
                             };
 
                             if let Some(path) = post_path {
-                                if let Some(actual_post) = app.posts.iter_mut().find(|p| p.path == path) {
-                                    let mut keys: Vec<String> = actual_post.frontmatter.keys().cloned().collect();
+                                if let Some(actual_post) =
+                                    app.posts.iter_mut().find(|p| p.path == path)
+                                {
+                                    let mut keys: Vec<String> =
+                                        actual_post.frontmatter.keys().cloned().collect();
                                     keys.sort();
 
                                     // Don't allow deleting if on "Add field" row
@@ -727,13 +773,18 @@ pub async fn run() -> Result<()> {
                                             // Don't allow deleting critical fields
                                             if key != "title" {
                                                 actual_post.frontmatter.remove(key);
-                                                app.status_message = format!("✓ Deleted field: {}", key);
+                                                app.status_message =
+                                                    format!("✓ Deleted field: {}", key);
                                                 // Move selection up if we were at the last field
-                                                if app.metadata_selected > 0 && app.metadata_selected >= actual_post.frontmatter.len() {
+                                                if app.metadata_selected > 0
+                                                    && app.metadata_selected
+                                                        >= actual_post.frontmatter.len()
+                                                {
                                                     app.metadata_selected -= 1;
                                                 }
                                             } else {
-                                                app.status_message = "✗ Cannot delete title field".to_string();
+                                                app.status_message =
+                                                    "✗ Cannot delete title field".to_string();
                                             }
                                         }
                                     }
@@ -753,14 +804,17 @@ pub async fn run() -> Result<()> {
                             if let Some(url) = app.config.preview_url(&post.path) {
                                 match Command::new("open").arg(&url).spawn() {
                                     Ok(_) => {
-                                        app.status_message = format!("✓ Opening in browser: {}", url);
+                                        app.status_message =
+                                            format!("✓ Opening in browser: {}", url);
                                     }
                                     Err(e) => {
-                                        app.status_message = format!("✗ Could not open browser: {}", e);
+                                        app.status_message =
+                                            format!("✗ Could not open browser: {}", e);
                                     }
                                 }
                             } else {
-                                app.status_message = "✗ Could not construct preview URL".to_string();
+                                app.status_message =
+                                    "✗ Could not construct preview URL".to_string();
                             }
                         }
                     }

@@ -104,11 +104,20 @@ pub async fn run(cli: Cli) -> Result<()> {
             crate::core::config::configure_site(&path)?;
             println!("✓ Configured textorium to use: {}", path);
         }
-        Some(Commands::New { title, category, tags, no_edit }) => {
+        Some(Commands::New {
+            title,
+            category: _,
+            tags: _,
+            no_edit: _,
+        }) => {
             println!("Creating new post: {}", title);
             // TODO: Implement
         }
-        Some(Commands::List { drafts, category, json }) => {
+        Some(Commands::List {
+            drafts: _,
+            category: _,
+            json: _,
+        }) => {
             println!("Listing posts...");
             // TODO: Implement
         }
@@ -116,15 +125,20 @@ pub async fn run(cli: Cli) -> Result<()> {
             println!("Publishing: {}", slug);
             // TODO: Implement
         }
-        Some(Commands::Idea { title, category, notes, tags }) => {
+        Some(Commands::Idea {
+            title,
+            category: _,
+            notes: _,
+            tags: _,
+        }) => {
             println!("Capturing idea: {}", title);
             // TODO: Implement
         }
-        Some(Commands::Serve { port, no_drafts }) => {
+        Some(Commands::Serve { port, no_drafts: _ }) => {
             println!("Starting server on port {}...", port);
             // TODO: Implement
         }
-        Some(Commands::Build { minify }) => {
+        Some(Commands::Build { minify: _ }) => {
             println!("Building site...");
             // TODO: Implement
         }
