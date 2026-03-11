@@ -45,6 +45,9 @@ regex = "1.11"
 # Config and storage
 directories = "5.0"
 
+[dev-dependencies]
+tempfile = "3.14"
+
 [profile.release]
 opt-level = 3
 lto = true
