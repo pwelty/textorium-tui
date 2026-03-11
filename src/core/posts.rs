@@ -6,7 +6,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
 
-use super::config::Config;
+use super::config::{Config, SsgType};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Post {
@@ -217,6 +217,14 @@ pub fn scan_posts(config: &Config) -> Result<Vec<Post>> {
         let ext = path.extension().and_then(|s| s.to_str());
         if ext != Some("md") && ext != Some("markdown") {
             continue;
+        }
+
+        // Skip Hugo section index files (_index.md, index.md)
+        if config.ssg == SsgType::Hugo {
+            let file_name = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
+            if file_name == "_index.md" || file_name == "index.md" {
+                continue;
+            }
         }
 
         // Try to read the post
