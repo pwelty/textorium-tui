@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
@@ -55,8 +55,7 @@ impl Config {
     /// Get the config file path
     fn config_path() -> Result<PathBuf> {
         // Use ~/.config/textorium to match Python version
-        let home = std::env::var("HOME")
-            .context("Could not determine home directory")?;
+        let home = std::env::var("HOME").context("Could not determine home directory")?;
         let config_dir = PathBuf::from(home).join(".config").join("textorium");
         fs::create_dir_all(&config_dir)?;
         Ok(config_dir.join("config.json"))
@@ -69,10 +68,9 @@ impl Config {
             return Ok(Self::default());
         }
 
-        let content = fs::read_to_string(&path)
-            .context("Failed to read config file")?;
-        let config: Config = serde_json::from_str(&content)
-            .context("Failed to parse config file")?;
+        let content = fs::read_to_string(&path).context("Failed to read config file")?;
+        let config: Config =
+            serde_json::from_str(&content).context("Failed to parse config file")?;
         Ok(config)
     }
 
@@ -80,8 +78,7 @@ impl Config {
     pub fn save(&self) -> Result<()> {
         let path = Self::config_path()?;
         let content = serde_json::to_string_pretty(self)?;
-        fs::write(&path, content)
-            .context("Failed to write config file")?;
+        fs::write(&path, content).context("Failed to write config file")?;
         Ok(())
     }
 
@@ -92,7 +89,7 @@ impl Config {
 
     /// Get the preview URL for a post
     /// Constructs the URL by combining the SSG dev server URL with the post's relative path
-    pub fn preview_url(&self, post_path: &PathBuf) -> Option<String> {
+    pub fn preview_url(&self, post_path: &Path) -> Option<String> {
         let site_path = PathBuf::from(&self.site_path);
 
         // Get path relative to site root
@@ -117,7 +114,8 @@ fn detect_ssg(path: &str) -> SsgType {
     // Hugo: has hugo.toml, hugo.yaml, or config.toml
     if path.join("hugo.toml").exists()
         || path.join("hugo.yaml").exists()
-        || path.join("config.toml").exists() {
+        || path.join("config.toml").exists()
+    {
         return SsgType::Hugo;
     }
 
@@ -127,8 +125,7 @@ fn detect_ssg(path: &str) -> SsgType {
     }
 
     // 11ty: has .eleventy.js or eleventy.config.js
-    if path.join(".eleventy.js").exists()
-        || path.join("eleventy.config.js").exists() {
+    if path.join(".eleventy.js").exists() || path.join("eleventy.config.js").exists() {
         return SsgType::Eleventy;
     }
 
@@ -141,20 +138,8 @@ fn detect_content_dir(path: &str, ssg: &SsgType) -> String {
     let path = PathBuf::from(path);
 
     match ssg {
-        SsgType::Hugo => {
-            if path.join("content").exists() {
-                "content".to_string()
-            } else {
-                "content".to_string() // Hugo default
-            }
-        }
-        SsgType::Jekyll => {
-            if path.join("_posts").exists() {
-                "_posts".to_string()
-            } else {
-                "_posts".to_string() // Jekyll default
-            }
-        }
+        SsgType::Hugo => "content".to_string(),
+        SsgType::Jekyll => "_posts".to_string(),
         SsgType::Eleventy => {
             if path.join("posts").exists() {
                 "posts".to_string()
@@ -169,8 +154,7 @@ fn detect_content_dir(path: &str, ssg: &SsgType) -> String {
 
 /// Configure textorium to use a site
 pub fn configure_site(path: &str) -> Result<()> {
-    let path = fs::canonicalize(path)
-        .context("Could not resolve site path")?;
+    let path = fs::canonicalize(path).context("Could not resolve site path")?;
     let path_str = path.to_string_lossy().to_string();
 
     let ssg = detect_ssg(&path_str);
