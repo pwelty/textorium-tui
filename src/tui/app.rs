@@ -17,7 +17,7 @@ use std::process::Command;
 
 use crate::core::{
     config::Config,
-    posts::{save_post, scan_posts, Post},
+    posts::{save_post, scan_posts, Post, ScanResult},
 };
 
 pub struct App {
@@ -49,7 +49,17 @@ enum SortMode {
 impl App {
     pub fn new() -> Result<Self> {
         let config = Config::load()?;
-        let posts = scan_posts(&config)?;
+        let ScanResult { posts, errors } = scan_posts(&config)?;
+
+        let status_message = if errors.is_empty() {
+            String::new()
+        } else {
+            format!(
+                "Loaded {} posts ({} skipped due to parse errors)",
+                posts.len(),
+                errors.len()
+            )
+        };
 
         Ok(Self {
             config,
@@ -64,7 +74,7 @@ impl App {
             drafts_only: false,
             edit_mode: false,
             edit_buffer: String::new(),
-            status_message: String::new(),
+            status_message,
             adding_field: false,
             new_field_key: String::new(),
         })
@@ -785,8 +795,17 @@ pub async fn run() -> Result<()> {
                                 app.status_message = format!("✗ Error opening editor: {}", e);
                             } else {
                                 // Reload posts after editing
-                                app.posts = scan_posts(&app.config)?;
-                                app.status_message = "✓ Reloaded after edit".to_string();
+                                let result = scan_posts(&app.config)?;
+                                let err_count = result.errors.len();
+                                app.posts = result.posts;
+                                app.status_message = if err_count > 0 {
+                                    format!(
+                                        "✓ Reloaded after edit ({} files skipped)",
+                                        err_count
+                                    )
+                                } else {
+                                    "✓ Reloaded after edit".to_string()
+                                };
                             }
                             // Redraw after returning from editor
                             terminal.clear()?;
@@ -850,7 +869,17 @@ pub async fn run() -> Result<()> {
                     KeyCode::Char('s') => app.cycle_sort(),
                     KeyCode::Char('f') => app.toggle_drafts(),
                     KeyCode::Char('r') => {
-                        app.posts = scan_posts(&app.config)?;
+                        let result = scan_posts(&app.config)?;
+                        let err_count = result.errors.len();
+                        app.posts = result.posts;
+                        app.status_message = if err_count > 0 {
+                            format!(
+                                "✓ Refreshed ({} files skipped due to parse errors)",
+                                err_count
+                            )
+                        } else {
+                            "✓ Refreshed".to_string()
+                        };
                     }
                     KeyCode::Char('o') => {
                         // Open current post in browser

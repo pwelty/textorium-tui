@@ -192,15 +192,25 @@ pub fn read_post(path: &Path) -> Result<Post> {
     })
 }
 
+/// Result of scanning posts: successful posts and any parse errors
+pub struct ScanResult {
+    pub posts: Vec<Post>,
+    pub errors: Vec<(PathBuf, String)>,
+}
+
 /// Scan directory for all markdown posts
-pub fn scan_posts(config: &Config) -> Result<Vec<Post>> {
+pub fn scan_posts(config: &Config) -> Result<ScanResult> {
     let content_path = config.content_path();
 
     if !content_path.exists() {
-        return Ok(Vec::new());
+        return Ok(ScanResult {
+            posts: Vec::new(),
+            errors: Vec::new(),
+        });
     }
 
     let mut posts = Vec::new();
+    let mut errors = Vec::new();
 
     for entry in WalkDir::new(&content_path)
         .follow_links(true)
@@ -227,16 +237,16 @@ pub fn scan_posts(config: &Config) -> Result<Vec<Post>> {
             }
         }
 
-        // Try to read the post
-        if let Ok(post) = read_post(path) {
-            posts.push(post);
+        match read_post(path) {
+            Ok(post) => posts.push(post),
+            Err(e) => errors.push((path.to_path_buf(), format!("{:#}", e))),
         }
     }
 
     // Sort by date, newest first
     posts.sort_by(|a, b| b.date.cmp(&a.date));
 
-    Ok(posts)
+    Ok(ScanResult { posts, errors })
 }
 
 /// Serialize a serde_json::Value as inline YAML suitable for frontmatter
