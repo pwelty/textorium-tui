@@ -28,7 +28,8 @@ tmux send-keys -t <session> 'your request here' Enter
 
 ### Rules
 
-- **Write output to a file.** Tell the target session to write results to `/tmp/something` so you can read them back. Pane capture truncates.
+- **Just send it.** The injected text lands in the target session's context naturally — no special coordination needed for most requests.
+- **For long output, write to a file.** If you need structured data back, tell the target to write results to `/tmp/something` and read the file. Pane capture only shows what's visible on screen.
 - **Check the session is idle first.** `tmux capture-pane -t <session> -p | tail -5` — look for a prompt, not a running command.
 - **Don't send to sessions with low context.** Low-context sessions may fail silently.
 - **Use the base session name** (e.g. `paulos`, not `paulos-7`). If the session uses groups, tmux routes to the right pane.
