@@ -653,7 +653,13 @@ pub async fn run() -> Result<()> {
                             }
                             2 => {
                                 // Content pane - scroll down
-                                app.content_scroll += 1;
+                                let filtered = app.get_filtered_posts();
+                                if let Some(post) = filtered.get(app.selected) {
+                                    let line_count = post.content.lines().count();
+                                    if app.content_scroll < line_count.saturating_sub(1) {
+                                        app.content_scroll += 1;
+                                    }
+                                }
                             }
                             _ => {}
                         }
