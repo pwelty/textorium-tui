@@ -808,14 +808,15 @@ pub async fn run() -> Result<()> {
                         let filtered = app.get_filtered_posts();
                         if let Some(post) = filtered.get(app.selected) {
                             if let Some(url) = app.config.preview_url(&post.path) {
-                                match Command::new("open").arg(&url).spawn() {
+                                match open::that(&url) {
                                     Ok(_) => {
                                         app.status_message =
                                             format!("✓ Opening in browser: {}", url);
                                     }
                                     Err(e) => {
                                         app.status_message =
-                                            format!("✗ Could not open browser: {}", e);
+                                            format!("✗ Could not open browser — URL: {}", url);
+                                        let _ = e; // Log suppressed; URL shown for manual copy
                                     }
                                 }
                             } else {
