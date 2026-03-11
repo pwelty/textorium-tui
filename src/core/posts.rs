@@ -52,32 +52,48 @@ fn parse_frontmatter(content: &str) -> Result<(HashMap<String, serde_json::Value
         return Ok((HashMap::new(), content.to_string()));
     }
 
-    let frontmatter: Frontmatter = serde_yaml::from_str(parts[1])
-        .context("Failed to parse YAML frontmatter")?;
+    let frontmatter: Frontmatter =
+        serde_yaml::from_str(parts[1]).context("Failed to parse YAML frontmatter")?;
 
     let body = parts[2].trim().to_string();
 
     // Convert to HashMap
     let mut fm_map = HashMap::new();
-    fm_map.insert("title".to_string(), serde_json::Value::String(frontmatter.title.clone()));
+    fm_map.insert(
+        "title".to_string(),
+        serde_json::Value::String(frontmatter.title.clone()),
+    );
 
     if let Some(date) = &frontmatter.date {
         fm_map.insert("date".to_string(), serde_json::Value::String(date.clone()));
     }
 
-    fm_map.insert("draft".to_string(), serde_json::Value::Bool(frontmatter.draft));
-    fm_map.insert("content_type".to_string(), serde_json::Value::String(frontmatter.content_type.clone()));
+    fm_map.insert(
+        "draft".to_string(),
+        serde_json::Value::Bool(frontmatter.draft),
+    );
+    fm_map.insert(
+        "content_type".to_string(),
+        serde_json::Value::String(frontmatter.content_type.clone()),
+    );
 
     if !frontmatter.categories.is_empty() {
-        let cats: Vec<serde_json::Value> = frontmatter.categories
+        let cats: Vec<serde_json::Value> = frontmatter
+            .categories
             .iter()
             .map(|c| serde_json::Value::String(c.clone()))
             .collect();
         fm_map.insert("categories".to_string(), serde_json::Value::Array(cats));
+    } else if let Some(cat) = &frontmatter.category {
+        fm_map.insert(
+            "categories".to_string(),
+            serde_json::Value::Array(vec![serde_json::Value::String(cat.clone())]),
+        );
     }
 
     if !frontmatter.tags.is_empty() {
-        let tags: Vec<serde_json::Value> = frontmatter.tags
+        let tags: Vec<serde_json::Value> = frontmatter
+            .tags
             .iter()
             .map(|t| serde_json::Value::String(t.clone()))
             .collect();
