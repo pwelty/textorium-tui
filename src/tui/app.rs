@@ -487,12 +487,8 @@ fn ui(f: &mut Frame, app: &App) {
     f.render_widget(metadata, right_chunks[0]);
 
     // Content pane
-    let pane_height = right_chunks[1].height.saturating_sub(2) as usize;
     let content_text = if let Some(post) = selected_post {
-        let lines: Vec<&str> = post.content.lines().collect();
-        let visible_start = app.content_scroll;
-        let visible_end = (visible_start + pane_height.max(1)).min(lines.len());
-        lines[visible_start..visible_end].join("\n")
+        post.content.clone()
     } else {
         "No post selected".to_string()
     };
@@ -516,7 +512,8 @@ fn ui(f: &mut Frame, app: &App) {
 
     let content = Paragraph::new(content_text)
         .block(content_block)
-        .wrap(Wrap { trim: false });
+        .wrap(Wrap { trim: false })
+        .scroll((app.content_scroll as u16, 0));
     f.render_widget(content, right_chunks[1]);
 
     // Status bar
