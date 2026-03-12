@@ -214,8 +214,54 @@ pub async fn run(cli: Cli) -> Result<()> {
             }
         }
         Some(Commands::Publish { slug }) => {
-            println!("Publishing: {}", slug);
-            // TODO: Implement
+            let config = crate::core::config::Config::load()?;
+            if config.site_path.is_empty() {
+                anyhow::bail!("No site configured. Run: textorium use <path>");
+            }
+
+            let result = crate::core::posts::scan_posts(&config)?;
+
+            // Find the post by slug (match against filename stem or relative path)
+            let matched = result.posts.into_iter().find(|p| {
+                let stem = p
+                    .path
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("");
+                let path_str = p.path.to_string_lossy();
+                stem == slug || path_str.ends_with(&slug)
+            });
+
+            match matched {
+                Some(mut post) => {
+                    if !post.draft {
+                        println!("Already published: {}", post.title);
+                    } else {
+                        post.frontmatter
+                            .insert("draft".to_string(), serde_json::Value::Bool(false));
+                        post.draft = false;
+                        crate::core::posts::save_post(&post)?;
+                        println!("✓ Published: {}", post.title);
+                    }
+                }
+                None => {
+                    let slugs: Vec<String> = crate::core::posts::scan_posts(&config)?
+                        .posts
+                        .iter()
+                        .filter_map(|p| {
+                            p.path.file_stem().and_then(|s| s.to_str().map(String::from))
+                        })
+                        .collect();
+                    eprintln!("Error: no post found matching \"{}\"", slug);
+                    if !slugs.is_empty() {
+                        eprintln!("Available slugs:");
+                        for s in &slugs {
+                            eprintln!("  {}", s);
+                        }
+                    }
+                    std::process::exit(1);
+                }
+            }
         }
         Some(Commands::Idea {
             title,
