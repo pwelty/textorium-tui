@@ -36,6 +36,7 @@ pub struct App {
     status_message: String, // Status bar message
     adding_field: bool,     // Whether we're adding a new field
     new_field_key: String,  // Key name for new field being added
+    quit_pending: bool,     // True after first 'q' press with unsaved changes
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -77,7 +78,19 @@ impl App {
             status_message,
             adding_field: false,
             new_field_key: String::new(),
+            quit_pending: false,
         })
+    }
+
+    fn dirty_count(&self) -> usize {
+        self.posts
+            .iter()
+            .filter(|p| p.frontmatter != p.original_frontmatter)
+            .count()
+    }
+
+    fn is_dirty(&self, post: &Post) -> bool {
+        post.frontmatter != post.original_frontmatter
     }
 
     fn get_filtered_posts(&self) -> Vec<&Post> {
@@ -267,8 +280,14 @@ fn ui(f: &mut Frame, app: &App) {
                 Style::default()
             };
 
+            let title_display = if app.is_dirty(post) {
+                format!("{} *", post.title)
+            } else {
+                post.title.clone()
+            };
+
             Row::new(vec![
-                Cell::from(post.title.as_str()),
+                Cell::from(title_display),
                 Cell::from(date),
                 Cell::from(content_type),
                 Cell::from(status),
@@ -499,17 +518,30 @@ fn ui(f: &mut Frame, app: &App) {
     f.render_widget(content, right_chunks[1]);
 
     // Status bar
-    let status_text = if !app.status_message.is_empty() {
-        app.status_message.clone()
+    let dirty = app.dirty_count();
+    let dirty_suffix = if dirty > 0 {
+        if dirty == 1 {
+            " | 1 unsaved change".to_string()
+        } else {
+            format!(" | {} unsaved changes", dirty)
+        }
+    } else {
+        String::new()
+    };
+
+    let status_text = if app.quit_pending {
+        "Unsaved changes. Press q again to quit, or Ctrl+S to save.".to_string()
+    } else if !app.status_message.is_empty() {
+        format!("{}{}", app.status_message, dirty_suffix)
     } else if app.search_mode {
         format!(
             "Search mode - Type to filter | Enter/Esc: exit search | {} matches",
             app.get_filtered_posts().len()
         )
     } else if app.focused_pane == 1 {
-        "q: quit | j/k: navigate | Enter: edit/add | d: delete field | Ctrl+S: save | Tab: switch panes | s: sort | f: filter | /: search | o: preview | r: refresh".to_string()
+        format!("q: quit | j/k: navigate | Enter: edit/add | d: delete field | Ctrl+S: save | Tab: switch panes | s: sort | f: filter | /: search | o: preview | r: refresh{}", dirty_suffix)
     } else {
-        "q: quit | j/k: navigate | Tab/h/l: switch panes | Enter: edit (meta) or open editor (content) | Ctrl+S: save | s: sort | f: filter | /: search | o: preview | r: refresh".to_string()
+        format!("q: quit | j/k: navigate | Tab/h/l: switch panes | Enter: edit (meta) or open editor (content) | Ctrl+S: save | s: sort | f: filter | /: search | o: preview | r: refresh{}", dirty_suffix)
     };
     let status_bar = Paragraph::new(status_text).style(Style::default().fg(Color::Gray));
     f.render_widget(status_bar, main_chunks[1]);
@@ -542,6 +574,11 @@ pub async fn run() -> Result<()> {
             // Clear status message on any key press (except when saving)
             if !key.modifiers.contains(KeyModifiers::CONTROL) || key.code != KeyCode::Char('s') {
                 app.status_message.clear();
+            }
+
+            // Clear quit_pending on any non-q key
+            if key.code != KeyCode::Char('q') {
+                app.quit_pending = false;
             }
 
             // Handle search mode input
@@ -681,7 +718,13 @@ pub async fn run() -> Result<()> {
             } else {
                 // Normal navigation mode
                 match key.code {
-                    KeyCode::Char('q') => break,
+                    KeyCode::Char('q') => {
+                        if app.dirty_count() == 0 || app.quit_pending {
+                            break;
+                        }
+                        app.quit_pending = true;
+                        continue;
+                    }
                     KeyCode::Char('s') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                         // Save current post to disk
                         let save_path = {
