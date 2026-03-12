@@ -414,7 +414,7 @@ fn ui(f: &mut Frame, app: &App) {
                     "content_type" | "type" => Color::Green,
                     "date" => Color::Blue,
                     "tags" | "categories" => Color::Magenta,
-                    _ => Color::White,
+                    _ => Color::Reset,
                 };
 
                 Line::from(vec![
