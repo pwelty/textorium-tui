@@ -682,4 +682,39 @@ mod tests {
         assert!(content.starts_with("---\n"));
         assert!(content.contains("---\n"));
     }
+
+    #[test]
+    fn test_multi_save_cycle_produces_correct_output() {
+        let original = "---\ntitle: My post\ndate: 2025-01-15\ndraft: true\n---\n\nBody.\n";
+        let f = create_temp_post(original);
+        let mut post = read_post(f.path()).unwrap();
+
+        // First edit: change title
+        post.frontmatter.insert(
+            "title".to_string(),
+            serde_json::Value::String("Updated title".to_string()),
+        );
+        save_post(&post).unwrap();
+
+        // Simulate what app.rs should do: reload baseline
+        let reloaded = read_post(f.path()).unwrap();
+        post.original_frontmatter = reloaded.original_frontmatter;
+        post.raw_frontmatter = reloaded.raw_frontmatter;
+
+        // Second save with no further changes should trigger unchanged fast path
+        save_post(&post).unwrap();
+        let saved = fs::read_to_string(f.path()).unwrap();
+        assert!(saved.contains("title: Updated title"));
+        assert!(saved.contains("date: 2025-01-15"));
+
+        // Third edit: change draft
+        post.frontmatter
+            .insert("draft".to_string(), serde_json::Value::Bool(false));
+        save_post(&post).unwrap();
+
+        let saved = fs::read_to_string(f.path()).unwrap();
+        assert!(saved.contains("title: Updated title"));
+        assert!(saved.contains("draft: false"));
+        assert!(saved.contains("date: 2025-01-15"));
+    }
 }
