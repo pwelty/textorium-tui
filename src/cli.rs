@@ -138,12 +138,80 @@ pub async fn run(cli: Cli) -> Result<()> {
             }
         }
         Some(Commands::List {
-            drafts: _,
-            category: _,
-            json: _,
+            drafts,
+            category,
+            json,
         }) => {
-            println!("Listing posts...");
-            // TODO: Implement
+            let config = crate::core::config::Config::load()?;
+            if config.site_path.is_empty() {
+                anyhow::bail!("No site configured. Run: textorium use <path>");
+            }
+
+            let result = crate::core::posts::scan_posts(&config)?;
+
+            // Report parse errors to stderr
+            for (path, err) in &result.errors {
+                eprintln!("Warning: skipped {}: {}", path.display(), err);
+            }
+
+            let mut posts = result.posts;
+
+            // Apply filters
+            if drafts {
+                posts.retain(|p| p.draft);
+            }
+            if let Some(ref cat) = category {
+                posts.retain(|p| p.categories.iter().any(|c| c.eq_ignore_ascii_case(cat)));
+            }
+
+            if json {
+                // JSON output for scripting
+                let json_posts: Vec<serde_json::Value> = posts
+                    .iter()
+                    .map(|p| {
+                        serde_json::json!({
+                            "title": p.title,
+                            "date": p.date.map(|d| d.to_rfc3339()),
+                            "draft": p.draft,
+                            "categories": p.categories,
+                            "tags": p.tags,
+                            "path": p.path.to_string_lossy(),
+                        })
+                    })
+                    .collect();
+                println!("{}", serde_json::to_string_pretty(&json_posts)?);
+            } else {
+                // Table output
+                if posts.is_empty() {
+                    println!("No posts found.");
+                } else {
+                    println!(
+                        "{:<50} {:<12} {:<8} Path",
+                        "Title", "Date", "Status"
+                    );
+                    println!("{}", "-".repeat(100));
+                    for p in &posts {
+                        let date_str = p
+                            .date
+                            .map(|d| d.format("%Y-%m-%d").to_string())
+                            .unwrap_or_else(|| "—".to_string());
+                        let status = if p.draft { "draft" } else { "published" };
+                        let title = if p.title.len() > 48 {
+                            format!("{}…", &p.title[..47])
+                        } else {
+                            p.title.clone()
+                        };
+                        println!(
+                            "{:<50} {:<12} {:<8} {}",
+                            title,
+                            date_str,
+                            status,
+                            p.path.display()
+                        );
+                    }
+                    println!("\n{} post(s)", posts.len());
+                }
+            }
         }
         Some(Commands::Publish { slug }) => {
             println!("Publishing: {}", slug);
