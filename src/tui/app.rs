@@ -514,7 +514,9 @@ fn ui(f: &mut Frame, app: &App) {
             Style::default()
         });
 
-    let content = Paragraph::new(content_text).block(content_block);
+    let content = Paragraph::new(content_text)
+        .block(content_block)
+        .wrap(Wrap { trim: false });
     f.render_widget(content, right_chunks[1]);
 
     // Status bar
