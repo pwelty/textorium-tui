@@ -17,7 +17,7 @@ use std::process::Command;
 
 use crate::core::{
     config::Config,
-    posts::{save_post, scan_posts, Post, ScanResult},
+    posts::{read_post, save_post, scan_posts, Post, ScanResult},
 };
 
 pub struct App {
@@ -684,14 +684,23 @@ pub async fn run() -> Result<()> {
                     KeyCode::Char('q') => break,
                     KeyCode::Char('s') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                         // Save current post to disk
-                        let filtered = app.get_filtered_posts();
-                        if let Some(post) = filtered.get(app.selected) {
-                            // Find the actual post in posts vec
+                        let save_path = {
+                            let filtered = app.get_filtered_posts();
+                            filtered.get(app.selected).map(|p| p.path.clone())
+                        };
+                        if let Some(path) = save_path {
                             if let Some(actual_post) =
-                                app.posts.iter().find(|p| p.path == post.path)
+                                app.posts.iter_mut().find(|p| p.path == path)
                             {
                                 match save_post(actual_post) {
                                     Ok(_) => {
+                                        // Update baseline so subsequent saves use correct diff
+                                        if let Ok(reloaded) = read_post(&actual_post.path) {
+                                            actual_post.original_frontmatter =
+                                                reloaded.original_frontmatter;
+                                            actual_post.raw_frontmatter =
+                                                reloaded.raw_frontmatter;
+                                        }
                                         app.status_message =
                                             format!("✓ Saved: {}", actual_post.path.display());
                                     }
