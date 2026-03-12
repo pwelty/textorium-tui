@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 
 #[derive(Parser)]
@@ -106,12 +106,36 @@ pub async fn run(cli: Cli) -> Result<()> {
         }
         Some(Commands::New {
             title,
-            category: _,
-            tags: _,
-            no_edit: _,
+            category,
+            tags,
+            no_edit,
         }) => {
-            println!("Creating new post: {}", title);
-            // TODO: Implement
+            let config = crate::core::config::Config::load()?;
+            if config.site_path.is_empty() {
+                anyhow::bail!("No site configured. Run: textorium use <path>");
+            }
+
+            let tag_list = tags.map(|t| t.split(',').map(|s| s.trim().to_string()).collect());
+
+            let options = crate::core::posts::CreatePostOptions {
+                title,
+                category,
+                tags: tag_list,
+            };
+
+            let path = crate::core::posts::create_post(&config, &options)?;
+            println!("{}", path.display());
+
+            if !no_edit {
+                let editor = config
+                    .editor
+                    .or_else(|| std::env::var("EDITOR").ok())
+                    .unwrap_or_else(|| "vi".to_string());
+                std::process::Command::new(&editor)
+                    .arg(&path)
+                    .status()
+                    .with_context(|| format!("Failed to open editor: {}", editor))?;
+            }
         }
         Some(Commands::List {
             drafts: _,

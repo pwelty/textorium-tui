@@ -401,6 +401,69 @@ pub fn save_post(post: &Post) -> Result<()> {
     Ok(())
 }
 
+/// Options for creating a new post
+pub struct CreatePostOptions {
+    pub title: String,
+    pub category: Option<String>,
+    pub tags: Option<Vec<String>>,
+}
+
+/// Create a new post file with YAML frontmatter and return the path
+pub fn create_post(config: &Config, options: &CreatePostOptions) -> Result<PathBuf> {
+    let slug = slugify(&options.title);
+    let now = Utc::now();
+
+    // Build file path based on SSG type
+    let content_path = config.content_path();
+    let file_path = match config.ssg {
+        SsgType::Hugo => content_path.join("posts").join(format!("{}.md", slug)),
+        SsgType::Jekyll => content_path.join(format!("{}-{}.md", now.format("%Y-%m-%d"), slug)),
+        SsgType::Eleventy => content_path.join(format!("{}.md", slug)),
+    };
+
+    // Ensure parent directory exists
+    if let Some(parent) = file_path.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("Failed to create directory: {}", parent.display()))?;
+    }
+
+    // Build frontmatter
+    let date_str = now.format("%Y-%m-%dT%H:%M:%SZ").to_string();
+    let mut frontmatter = format!(
+        "---\ntitle: \"{}\"\ndate: {}\ndraft: true\n",
+        options.title.replace('"', "\\\""),
+        date_str
+    );
+
+    if let Some(cat) = &options.category {
+        frontmatter.push_str(&format!("categories: [{}]\n", cat));
+    }
+
+    if let Some(tags) = &options.tags {
+        let tags_str = tags.join(", ");
+        frontmatter.push_str(&format!("tags: [{}]\n", tags_str));
+    }
+
+    frontmatter.push_str("---\n");
+
+    fs::write(&file_path, &frontmatter)
+        .with_context(|| format!("Failed to write post: {}", file_path.display()))?;
+
+    Ok(file_path)
+}
+
+/// Convert a title to a URL-friendly slug
+fn slugify(title: &str) -> String {
+    title
+        .to_lowercase()
+        .chars()
+        .map(|c| if c.is_alphanumeric() || c == ' ' { c } else { ' ' })
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<&str>>()
+        .join("-")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -515,5 +578,108 @@ mod tests {
         assert!(!saved.contains("author"), "Deleted field should be removed");
         assert!(saved.contains("title: My post"));
         assert!(saved.contains("draft: false"));
+    }
+
+    #[test]
+    fn test_slugify_basic() {
+        assert_eq!(slugify("My First Post"), "my-first-post");
+    }
+
+    #[test]
+    fn test_slugify_special_chars() {
+        assert_eq!(
+            slugify("Hello, World! It's 2026"),
+            "hello-world-it-s-2026"
+        );
+    }
+
+    #[test]
+    fn test_slugify_extra_spaces() {
+        assert_eq!(slugify("  Too   Many  Spaces  "), "too-many-spaces");
+    }
+
+    #[test]
+    fn test_create_post_hugo() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = Config {
+            site_path: dir.path().to_string_lossy().to_string(),
+            content_dir: "content".to_string(),
+            ssg: SsgType::Hugo,
+            ..Default::default()
+        };
+
+        let options = CreatePostOptions {
+            title: "My Test Post".to_string(),
+            category: Some("dev".to_string()),
+            tags: Some(vec!["rust".to_string(), "tui".to_string()]),
+        };
+
+        let path = create_post(&config, &options).unwrap();
+
+        assert!(path.exists());
+        assert!(path.to_string_lossy().contains("my-test-post.md"));
+        assert!(path.to_string_lossy().contains("content/posts/"));
+
+        let content = fs::read_to_string(&path).unwrap();
+        assert!(content.contains("title: \"My Test Post\""));
+        assert!(content.contains("draft: true"));
+        assert!(content.contains("categories: [dev]"));
+        assert!(content.contains("tags: [rust, tui]"));
+    }
+
+    #[test]
+    fn test_create_post_jekyll() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = Config {
+            site_path: dir.path().to_string_lossy().to_string(),
+            content_dir: "_posts".to_string(),
+            ssg: SsgType::Jekyll,
+            ..Default::default()
+        };
+
+        let options = CreatePostOptions {
+            title: "Jekyll Post".to_string(),
+            category: None,
+            tags: None,
+        };
+
+        let path = create_post(&config, &options).unwrap();
+
+        assert!(path.exists());
+        // Jekyll format: _posts/YYYY-MM-DD-slug.md
+        let filename = path.file_name().unwrap().to_string_lossy();
+        assert!(filename.ends_with("-jekyll-post.md"));
+        assert!(filename.len() > 15); // date prefix + slug
+
+        let content = fs::read_to_string(&path).unwrap();
+        assert!(content.contains("title: \"Jekyll Post\""));
+        assert!(content.contains("draft: true"));
+        assert!(!content.contains("categories:"));
+        assert!(!content.contains("tags:"));
+    }
+
+    #[test]
+    fn test_create_post_no_category_no_tags() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = Config {
+            site_path: dir.path().to_string_lossy().to_string(),
+            content_dir: "content".to_string(),
+            ssg: SsgType::Hugo,
+            ..Default::default()
+        };
+
+        let options = CreatePostOptions {
+            title: "Plain Post".to_string(),
+            category: None,
+            tags: None,
+        };
+
+        let path = create_post(&config, &options).unwrap();
+        let content = fs::read_to_string(&path).unwrap();
+
+        assert!(!content.contains("categories:"));
+        assert!(!content.contains("tags:"));
+        assert!(content.starts_with("---\n"));
+        assert!(content.contains("---\n"));
     }
 }
