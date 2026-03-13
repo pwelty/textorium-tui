@@ -317,9 +317,42 @@ pub async fn run(cli: Cli) -> Result<()> {
                 std::process::exit(status.code().unwrap_or(1));
             }
         }
-        Some(Commands::Build { minify: _ }) => {
-            println!("Building site...");
-            // TODO: Implement
+        Some(Commands::Build { minify }) => {
+            let config = crate::core::config::Config::load()?;
+            if config.site_path.is_empty() {
+                anyhow::bail!("No site configured. Run: textorium use <path>");
+            }
+
+            let (program, mut args): (&str, Vec<&str>) = match config.ssg {
+                crate::core::config::SsgType::Hugo => ("hugo", vec![]),
+                crate::core::config::SsgType::Jekyll => {
+                    ("bundle", vec!["exec", "jekyll", "build"])
+                }
+                crate::core::config::SsgType::Eleventy => ("npx", vec!["@11ty/eleventy"]),
+            };
+
+            if minify && config.ssg == crate::core::config::SsgType::Hugo {
+                args.push("--minify");
+            }
+
+            let ssg_name = match config.ssg {
+                crate::core::config::SsgType::Hugo => "Hugo",
+                crate::core::config::SsgType::Jekyll => "Jekyll",
+                crate::core::config::SsgType::Eleventy => "Eleventy",
+            };
+            println!("Building site with {}...", ssg_name);
+
+            let status = std::process::Command::new(program)
+                .args(&args)
+                .current_dir(&config.site_path)
+                .status()
+                .with_context(|| format!("Failed to run '{}'. Is it installed?", program))?;
+
+            if status.success() {
+                println!("✓ Build complete");
+            } else {
+                std::process::exit(status.code().unwrap_or(1));
+            }
         }
     }
 
