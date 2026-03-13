@@ -272,9 +272,50 @@ pub async fn run(cli: Cli) -> Result<()> {
             println!("Capturing idea: {}", title);
             // TODO: Implement
         }
-        Some(Commands::Serve { port, no_drafts: _ }) => {
-            println!("Starting server on port {}...", port);
-            // TODO: Implement
+        Some(Commands::Serve { port, no_drafts }) => {
+            let config = crate::core::config::Config::load()?;
+            if config.site_path.is_empty() {
+                anyhow::bail!("No site configured. Run: textorium use <path>");
+            }
+
+            let port_str = port.to_string();
+            let (program, mut args): (&str, Vec<&str>) = match config.ssg {
+                crate::core::config::SsgType::Hugo => {
+                    ("hugo", vec!["server", "--port", &port_str])
+                }
+                crate::core::config::SsgType::Jekyll => {
+                    ("bundle", vec!["exec", "jekyll", "serve", "--port", &port_str])
+                }
+                crate::core::config::SsgType::Eleventy => {
+                    ("npx", vec!["@11ty/eleventy", "--serve", "--port", &port_str])
+                }
+            };
+
+            // Include drafts by default; --no-drafts opts out
+            if !no_drafts {
+                match config.ssg {
+                    crate::core::config::SsgType::Hugo => args.push("-D"),
+                    crate::core::config::SsgType::Jekyll => args.push("--drafts"),
+                    crate::core::config::SsgType::Eleventy => {}
+                }
+            }
+
+            let ssg_name = match config.ssg {
+                crate::core::config::SsgType::Hugo => "Hugo",
+                crate::core::config::SsgType::Jekyll => "Jekyll",
+                crate::core::config::SsgType::Eleventy => "Eleventy",
+            };
+            println!("Starting {} dev server on port {}...", ssg_name, port);
+
+            let status = std::process::Command::new(program)
+                .args(&args)
+                .current_dir(&config.site_path)
+                .status()
+                .with_context(|| format!("Failed to run '{}'. Is it installed?", program))?;
+
+            if !status.success() {
+                std::process::exit(status.code().unwrap_or(1));
+            }
         }
         Some(Commands::Build { minify: _ }) => {
             println!("Building site...");
