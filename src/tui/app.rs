@@ -754,7 +754,11 @@ pub async fn run() -> Result<()> {
                         }
                     }
                     KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                        break;
+                        if app.dirty_count() == 0 || app.quit_pending {
+                            break;
+                        }
+                        app.quit_pending = true;
+                        continue;
                     }
                     KeyCode::Char('j') | KeyCode::Down => {
                         match app.focused_pane {
