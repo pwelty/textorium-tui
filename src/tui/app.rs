@@ -101,8 +101,7 @@ impl App {
             filtered.retain(|p| p.draft);
         }
 
-        // Search: filters by title, content, and categories (case-insensitive substring match)
-        // Note: Does not search tags or other frontmatter fields
+        // Search: filters by title, content, categories, and tags (case-insensitive substring match)
         if !self.search_query.is_empty() {
             let query = self.search_query.to_lowercase();
             filtered.retain(|p| {
@@ -111,6 +110,9 @@ impl App {
                     || p.categories
                         .iter()
                         .any(|c| c.to_lowercase().contains(&query))
+                    || p.tags
+                        .iter()
+                        .any(|t| t.to_lowercase().contains(&query))
             });
         }
 
