@@ -221,6 +221,13 @@ pub async fn run(cli: Cli) -> Result<()> {
 
             let result = crate::core::posts::scan_posts(&config)?;
 
+            // Collect slugs before consuming the iterator (avoids a second scan on not-found)
+            let slugs: Vec<String> = result
+                .posts
+                .iter()
+                .filter_map(|p| p.path.file_stem().and_then(|s| s.to_str().map(String::from)))
+                .collect();
+
             // Find the post by slug (match against filename stem or relative path)
             let matched = result.posts.into_iter().find(|p| {
                 let stem = p
@@ -245,13 +252,6 @@ pub async fn run(cli: Cli) -> Result<()> {
                     }
                 }
                 None => {
-                    let slugs: Vec<String> = crate::core::posts::scan_posts(&config)?
-                        .posts
-                        .iter()
-                        .filter_map(|p| {
-                            p.path.file_stem().and_then(|s| s.to_str().map(String::from))
-                        })
-                        .collect();
                     eprintln!("Error: no post found matching \"{}\"", slug);
                     if !slugs.is_empty() {
                         eprintln!("Available slugs:");
