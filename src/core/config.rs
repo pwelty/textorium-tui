@@ -11,10 +11,6 @@ pub struct Config {
     pub ssg: SsgType,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub editor: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub notion_database_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub notion_token: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -45,8 +41,6 @@ impl Default for Config {
             content_dir: "content".to_string(),
             ssg: SsgType::Hugo,
             editor: None,
-            notion_database_id: None,
-            notion_token: None,
         }
     }
 }
@@ -172,7 +166,6 @@ pub fn configure_site(path: &str) -> Result<()> {
         content_dir,
         ssg,
         editor: std::env::var("EDITOR").ok(),
-        ..Default::default()
     };
 
     config.save()?;
