@@ -9,7 +9,7 @@ use ratatui::{
     layout::{Constraint, Direction, Layout},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Cell, Paragraph, Row, Table, Wrap},
+    widgets::{Block, Borders, Cell, Paragraph, Row, Table, TableState, Wrap},
     Frame, Terminal,
 };
 use std::io;
@@ -24,6 +24,7 @@ pub struct App {
     config: Config,
     posts: Vec<Post>,
     selected: usize,
+    table_state: TableState,
     focused_pane: usize,      // 0=posts, 1=metadata, 2=content
     metadata_selected: usize, // Selected field in metadata pane
     content_scroll: usize,    // Scroll offset in content pane
@@ -62,10 +63,14 @@ impl App {
             )
         };
 
+        let mut table_state = TableState::default();
+        table_state.select(Some(0));
+
         Ok(Self {
             config,
             posts,
             selected: 0,
+            table_state,
             focused_pane: 0,
             metadata_selected: 0,
             content_scroll: 0,
@@ -80,6 +85,11 @@ impl App {
             new_field_key: String::new(),
             quit_pending: false,
         })
+    }
+
+    fn set_selected(&mut self, index: usize) {
+        self.selected = index;
+        self.table_state.select(Some(index));
     }
 
     fn dirty_count(&self) -> usize {
@@ -130,14 +140,29 @@ impl App {
     fn select_next(&mut self) {
         let filtered = self.get_filtered_posts();
         if !filtered.is_empty() && self.selected < filtered.len() - 1 {
-            self.selected += 1;
+            self.set_selected(self.selected + 1);
         }
     }
 
     fn select_prev(&mut self) {
         if self.selected > 0 {
-            self.selected -= 1;
+            self.set_selected(self.selected - 1);
         }
+    }
+
+    fn page_down(&mut self, page_size: usize) {
+        let filtered = self.get_filtered_posts();
+        if filtered.is_empty() {
+            return;
+        }
+        let max = filtered.len() - 1;
+        let new = (self.selected + page_size).min(max);
+        self.set_selected(new);
+    }
+
+    fn page_up(&mut self, page_size: usize) {
+        let new = self.selected.saturating_sub(page_size);
+        self.set_selected(new);
     }
 
     fn cycle_sort(&mut self) {
@@ -147,12 +172,12 @@ impl App {
             SortMode::TitleAsc => SortMode::TitleDesc,
             SortMode::TitleDesc => SortMode::DateDesc,
         };
-        self.selected = 0;
+        self.set_selected(0);
     }
 
     fn toggle_drafts(&mut self) {
         self.drafts_only = !self.drafts_only;
-        self.selected = 0;
+        self.set_selected(0);
     }
 
     fn empty_state_message(&self) -> Option<String> {
@@ -224,7 +249,7 @@ impl App {
     }
 }
 
-fn ui(f: &mut Frame, app: &App) {
+fn ui(f: &mut Frame, app: &mut App) {
     // Main layout with status bar at bottom
     let main_chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -241,8 +266,75 @@ fn ui(f: &mut Frame, app: &App) {
         .constraints([Constraint::Percentage(40), Constraint::Percentage(60)])
         .split(chunks[1]);
 
-    // Posts table
-    let filtered_posts = app.get_filtered_posts();
+    // Posts table — build rows and title in a scoped borrow, then render statefully
+    let (rows, posts_title, _filtered_count, is_empty, empty_message) = {
+        let filtered_posts = app.get_filtered_posts();
+        let filtered_count = filtered_posts.len();
+        let is_empty = filtered_posts.is_empty();
+
+        let empty_message = if is_empty {
+            if !app.search_query.is_empty() {
+                format!("No posts match \"{}\"", app.search_query)
+            } else if app.drafts_only {
+                "No draft posts found".to_string()
+            } else {
+                app.empty_state_message()
+                    .unwrap_or_else(|| "No posts found".to_string())
+            }
+        } else {
+            String::new()
+        };
+
+        let rows: Vec<Row> = filtered_posts
+            .iter()
+            .map(|post| {
+                let date = post
+                    .date
+                    .map(|d| d.format("%Y-%m-%d").to_string())
+                    .unwrap_or_else(|| "—".to_string());
+
+                let status = if post.draft { "draft" } else { "" };
+                let content_type = if post.content_type.is_empty() {
+                    "—"
+                } else {
+                    &post.content_type
+                };
+
+                let title_display = if app.is_dirty(post) {
+                    format!("{} *", post.title)
+                } else {
+                    post.title.clone()
+                };
+
+                Row::new(vec![
+                    Cell::from(title_display),
+                    Cell::from(date),
+                    Cell::from(content_type.to_string()),
+                    Cell::from(status.to_string()),
+                ])
+            })
+            .collect();
+
+        let focus = if app.focused_pane == 0 {
+            " [FOCUSED]"
+        } else {
+            ""
+        };
+        let filter = if app.drafts_only {
+            " [DRAFTS ONLY]"
+        } else {
+            ""
+        };
+        let search = if !app.search_query.is_empty() {
+            format!(" [SEARCH: \"{}\"]", app.search_query)
+        } else {
+            String::new()
+        };
+        let count = format!(" ({}/{})", filtered_count, app.posts.len());
+        let posts_title = format!("Posts{}{}{}{}", count, filter, search, focus);
+
+        (rows, posts_title, filtered_count, is_empty, empty_message)
+    };
 
     // Build header with sort indicators
     let (title_header, date_header) = match app.sort_mode {
@@ -259,64 +351,6 @@ fn ui(f: &mut Frame, app: &App) {
         Cell::from("Status"),
     ])
     .style(Style::default().add_modifier(Modifier::BOLD));
-
-    let rows: Vec<Row> = filtered_posts
-        .iter()
-        .enumerate()
-        .map(|(i, post)| {
-            let date = post
-                .date
-                .map(|d| d.format("%Y-%m-%d").to_string())
-                .unwrap_or_else(|| "—".to_string());
-
-            let status = if post.draft { "draft" } else { "" };
-            let content_type = if post.content_type.is_empty() {
-                "—"
-            } else {
-                &post.content_type
-            };
-
-            let style = if i == app.selected {
-                Style::default().add_modifier(Modifier::REVERSED)
-            } else {
-                Style::default()
-            };
-
-            let title_display = if app.is_dirty(post) {
-                format!("{} *", post.title)
-            } else {
-                post.title.clone()
-            };
-
-            Row::new(vec![
-                Cell::from(title_display),
-                Cell::from(date),
-                Cell::from(content_type),
-                Cell::from(status),
-            ])
-            .style(style)
-        })
-        .collect();
-
-    let posts_title = {
-        let focus = if app.focused_pane == 0 {
-            " [FOCUSED]"
-        } else {
-            ""
-        };
-        let filter = if app.drafts_only {
-            " [DRAFTS ONLY]"
-        } else {
-            ""
-        };
-        let search = if !app.search_query.is_empty() {
-            format!(" [SEARCH: \"{}\"]", app.search_query)
-        } else {
-            String::new()
-        };
-        let count = format!(" ({}/{})", filtered_posts.len(), app.posts.len());
-        format!("Posts{}{}{}{}", count, filter, search, focus)
-    };
 
     let posts_block = Block::default()
         .borders(Borders::ALL)
@@ -337,27 +371,22 @@ fn ui(f: &mut Frame, app: &App) {
     ];
 
     // Show empty state message or posts table
-    if filtered_posts.is_empty() {
-        let message = if !app.search_query.is_empty() {
-            format!("No posts match \"{}\"", app.search_query)
-        } else if app.drafts_only {
-            "No draft posts found".to_string()
-        } else {
-            app.empty_state_message()
-                .unwrap_or_else(|| "No posts found".to_string())
-        };
-
-        let empty_state = Paragraph::new(message)
+    if is_empty {
+        let empty_state = Paragraph::new(empty_message)
             .block(posts_block)
             .style(Style::default().fg(Color::DarkGray))
             .wrap(Wrap { trim: false });
         f.render_widget(empty_state, chunks[0]);
     } else {
-        let posts_table = Table::new(rows, widths).header(header).block(posts_block);
-        f.render_widget(posts_table, chunks[0]);
+        let posts_table = Table::new(rows, widths)
+            .header(header)
+            .block(posts_block)
+            .row_highlight_style(Style::default().add_modifier(Modifier::REVERSED));
+        f.render_stateful_widget(posts_table, chunks[0], &mut app.table_state);
     }
 
     // Metadata pane
+    let filtered_posts = app.get_filtered_posts();
     let selected_post = filtered_posts.get(app.selected);
     let mut metadata_text = if let Some(post) = selected_post {
         // Collect all frontmatter fields
@@ -569,7 +598,7 @@ pub async fn run() -> Result<()> {
 
     // Main loop
     loop {
-        terminal.draw(|f| ui(f, &app))?;
+        terminal.draw(|f| ui(f, &mut app))?;
 
         if let Event::Key(key) = event::read()? {
             // Clear status message on any key press (except when saving)
@@ -587,11 +616,11 @@ pub async fn run() -> Result<()> {
                 match key.code {
                     KeyCode::Char(c) => {
                         app.search_query.push(c);
-                        app.selected = 0; // Reset selection when search changes
+                        app.set_selected(0); // Reset selection when search changes
                     }
                     KeyCode::Backspace => {
                         app.search_query.pop();
-                        app.selected = 0;
+                        app.set_selected(0);
                     }
                     KeyCode::Esc | KeyCode::Enter => {
                         // Exit search mode
@@ -761,6 +790,20 @@ pub async fn run() -> Result<()> {
                         }
                         app.quit_pending = true;
                         continue;
+                    }
+                    KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                        if app.focused_pane == 0 {
+                            let size = terminal.size()?;
+                            let half_page = (size.height as usize).saturating_sub(4) / 2;
+                            app.page_down(half_page);
+                        }
+                    }
+                    KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                        if app.focused_pane == 0 {
+                            let size = terminal.size()?;
+                            let half_page = (size.height as usize).saturating_sub(4) / 2;
+                            app.page_up(half_page);
+                        }
                     }
                     KeyCode::Char('j') | KeyCode::Down => {
                         match app.focused_pane {
@@ -972,14 +1015,14 @@ pub async fn run() -> Result<()> {
                         // Enter search mode
                         app.search_mode = true;
                         app.search_query.clear();
-                        app.selected = 0;
+                        app.set_selected(0);
                         app.status_message = "Search mode: type to filter posts".to_string();
                     }
                     KeyCode::Esc => {
                         // Clear search if active
                         if !app.search_query.is_empty() {
                             app.search_query.clear();
-                            app.selected = 0;
+                            app.set_selected(0);
                             app.status_message = "Search cleared".to_string();
                         }
                     }
