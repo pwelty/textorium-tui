@@ -178,8 +178,11 @@ pub async fn run(cli: Cli) -> Result<()> {
                             .map(|d| d.format("%Y-%m-%d").to_string())
                             .unwrap_or_else(|| "—".to_string());
                         let status = if p.draft { "draft" } else { "published" };
-                        let title = if p.title.len() > 48 {
-                            format!("{}…", &p.title[..47])
+                        let title = if p.title.chars().count() > 48 {
+                            format!(
+                                "{}…",
+                                p.title.chars().take(47).collect::<String>()
+                            )
                         } else {
                             p.title.clone()
                         };
