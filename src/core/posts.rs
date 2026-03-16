@@ -416,7 +416,10 @@ pub fn create_post(config: &Config, options: &CreatePostOptions) -> Result<PathB
     // Build file path based on SSG type
     let content_path = config.content_path();
     let file_path = match config.ssg {
-        SsgType::Hugo => content_path.join("posts").join(format!("{}.md", slug)),
+        SsgType::Hugo => {
+            let section = options.category.as_deref().unwrap_or("posts");
+            content_path.join(section).join(format!("{}.md", slug))
+        }
         SsgType::Jekyll => content_path.join(format!("{}-{}.md", now.format("%Y-%m-%d"), slug)),
         SsgType::Eleventy => content_path.join(format!("{}.md", slug)),
     };
@@ -618,13 +621,43 @@ mod tests {
 
         assert!(path.exists());
         assert!(path.to_string_lossy().contains("my-test-post.md"));
-        assert!(path.to_string_lossy().contains("content/posts/"));
+        assert!(
+            path.to_string_lossy().contains("content/dev/"),
+            "Hugo post with --category dev should go in content/dev/, got: {}",
+            path.display()
+        );
 
         let content = fs::read_to_string(&path).unwrap();
         assert!(content.contains("title: \"My Test Post\""));
         assert!(content.contains("draft: true"));
         assert!(content.contains("categories: [dev]"));
         assert!(content.contains("tags: [rust, tui]"));
+    }
+
+    #[test]
+    fn test_create_post_hugo_default_section() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = Config {
+            site_path: dir.path().to_string_lossy().to_string(),
+            content_dir: "content".to_string(),
+            ssg: SsgType::Hugo,
+            ..Default::default()
+        };
+
+        let options = CreatePostOptions {
+            title: "No Category Post".to_string(),
+            category: None,
+            tags: None,
+        };
+
+        let path = create_post(&config, &options).unwrap();
+
+        assert!(path.exists());
+        assert!(
+            path.to_string_lossy().contains("content/posts/"),
+            "Hugo post without category should default to content/posts/, got: {}",
+            path.display()
+        );
     }
 
     #[test]
