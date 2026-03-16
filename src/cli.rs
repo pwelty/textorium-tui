@@ -57,29 +57,11 @@ pub enum Commands {
         slug: String,
     },
 
-    /// Capture an idea to Notion
-    Idea {
-        /// Idea title
-        title: String,
-
-        /// Category
-        #[arg(short, long)]
-        category: Option<String>,
-
-        /// Additional notes
-        #[arg(short, long)]
-        notes: Option<String>,
-
-        /// Tags (comma-separated)
-        #[arg(short, long)]
-        tags: Option<String>,
-    },
-
     /// Start development server
     Serve {
-        /// Port number
-        #[arg(short, long, default_value = "1313")]
-        port: u16,
+        /// Port number (default: 1313 Hugo, 4000 Jekyll, 8080 Eleventy)
+        #[arg(short, long)]
+        port: Option<u16>,
 
         /// Don't include drafts
         #[arg(long)]
@@ -263,21 +245,17 @@ pub async fn run(cli: Cli) -> Result<()> {
                 }
             }
         }
-        Some(Commands::Idea {
-            title,
-            category: _,
-            notes: _,
-            tags: _,
-        }) => {
-            println!("Capturing idea: {}", title);
-            // TODO: Implement
-        }
         Some(Commands::Serve { port, no_drafts }) => {
             let config = crate::core::config::Config::load()?;
             if config.site_path.is_empty() {
                 anyhow::bail!("No site configured. Run: textorium use <path>");
             }
 
+            let port = port.unwrap_or(match config.ssg {
+                crate::core::config::SsgType::Hugo => 1313,
+                crate::core::config::SsgType::Jekyll => 4000,
+                crate::core::config::SsgType::Eleventy => 8080,
+            });
             let port_str = port.to_string();
             let (program, mut args): (&str, Vec<&str>) = match config.ssg {
                 crate::core::config::SsgType::Hugo => {

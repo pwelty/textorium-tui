@@ -19,27 +19,29 @@ cargo install --path .
 ## Quick start
 
 ```bash
-# Configure your site (first time only)
+# Point textorium at your site (first time only)
 textorium use ~/Projects/my-blog
 
-# Launch
+# Launch the TUI
 textorium
 ```
 
 Textorium auto-detects your SSG type (Hugo, Jekyll, Eleventy) and scans the appropriate content directories.
 
-## Features
+## TUI
 
-- Three-pane TUI: posts table, metadata editor, content preview
+Three-pane layout: posts table (left), metadata editor (top-right), content preview (bottom-right).
+
 - Sortable columns (title, date, type, status)
-- Real-time search across title, content, and categories
-- Inline metadata editing with add/delete fields
-- External editor integration (opens `$EDITOR`)
+- Real-time search across title, content, categories, and tags
+- Inline metadata editing — add, edit, and delete frontmatter fields
+- Unsaved changes indicator and quit confirmation
+- External editor integration (`$EDITOR`)
 - Browser preview (auto-detects dev server URL)
-- Save changes directly to markdown files
 - Draft filter toggle
+- Save changes directly to markdown files (`Ctrl+S`)
 
-## Keyboard shortcuts
+### Keyboard shortcuts
 
 **Navigation:**
 
@@ -61,24 +63,44 @@ Textorium auto-detects your SSG type (Hugo, Jekyll, Eleventy) and scans the appr
 | `/` | Search |
 | `o` | Open in browser |
 | `r` | Refresh posts |
-| `q` | Quit |
+| `q` / `Ctrl+C` | Quit (confirms if unsaved changes) |
+
+## CLI commands
+
+```bash
+# Create a new post
+textorium new "My post title" --category blog --tags "rust,tui"
+
+# List posts (table or JSON)
+textorium list
+textorium list --drafts --json
+
+# Publish a draft
+textorium publish my-post-slug
+
+# Start dev server (SSG-aware, includes drafts by default)
+textorium serve
+textorium serve --port 3000 --no-drafts
+
+# Build for production
+textorium build
+textorium build --minify  # Hugo only
+```
 
 ## Supported SSGs
 
-| SSG | Detection | Dev server |
-|-----|-----------|------------|
-| Hugo | `content/` directory | localhost:1313 |
-| Jekyll | `_posts/` directory | localhost:4000 |
-| Eleventy | `.eleventy.js` config | localhost:8080 |
-
-Falls back to full directory scan for other SSGs.
+| SSG | Detection | Content directory | Default dev port |
+|-----|-----------|-------------------|-----------------|
+| Hugo | `content/` directory | `content/` | 1313 |
+| Jekyll | `_posts/` directory | `_posts/` + `_drafts/` | 4000 |
+| Eleventy | `.eleventy.js` config | Full directory scan | 8080 |
 
 ## Performance
 
 On a 621-post Hugo site:
 
 | Metric | Result |
-|--------|--------|
+|--------|-------:|
 | Startup | ~15ms |
 | Initial scan | ~120ms |
 | Navigation | <1ms |
