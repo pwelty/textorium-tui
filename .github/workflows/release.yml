@@ -58,3 +58,72 @@ jobs:
             textorium-aarch64-apple-darwin/textorium-${{ github.ref_name }}-aarch64-apple-darwin.tar.gz
             textorium-x86_64-apple-darwin/textorium-${{ github.ref_name }}-x86_64-apple-darwin.tar.gz
           generate_release_notes: true
+
+  update-homebrew:
+    needs: release
+    runs-on: ubuntu-latest
+    env:
+      TAG: ${{ github.ref_name }}
+
+    steps:
+      - name: Extract version from tag
+        id: version
+        run: echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Download release tarballs and compute SHA256
+        id: sha
+        run: |
+          BASE="https://github.com/pwelty/textorium-tui/releases/download/${TAG}"
+          curl -sL "${BASE}/textorium-${TAG}-aarch64-apple-darwin.tar.gz" -o arm64.tar.gz
+          curl -sL "${BASE}/textorium-${TAG}-x86_64-apple-darwin.tar.gz" -o x86_64.tar.gz
+          echo "arm64=$(sha256sum arm64.tar.gz | awk '{print $1}')" >> "$GITHUB_OUTPUT"
+          echo "x86_64=$(sha256sum x86_64.tar.gz | awk '{print $1}')" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout homebrew-tap
+        uses: actions/checkout@v4
+        with:
+          repository: pwelty/homebrew-tap
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+
+      - name: Update formula
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          ARM64_SHA: ${{ steps.sha.outputs.arm64 }}
+          X86_SHA: ${{ steps.sha.outputs.x86_64 }}
+        run: |
+          cat > Formula/textorium.rb << FORMULA
+          class Textorium < Formula
+            desc "Fast terminal interface for static site generators"
+            homepage "https://textorium.app"
+            version "${VERSION}"
+            license "MIT"
+
+            on_arm do
+              url "https://github.com/pwelty/textorium-tui/releases/download/${TAG}/textorium-${TAG}-aarch64-apple-darwin.tar.gz"
+              sha256 "${ARM64_SHA}"
+            end
+
+            on_intel do
+              url "https://github.com/pwelty/textorium-tui/releases/download/${TAG}/textorium-${TAG}-x86_64-apple-darwin.tar.gz"
+              sha256 "${X86_SHA}"
+            end
+
+            def install
+              bin.install "textorium"
+            end
+
+            test do
+              assert_match "textorium ${VERSION}", shell_output("#{bin}/textorium --version")
+            end
+          end
+          FORMULA
+
+      - name: Commit and push formula
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Formula/textorium.rb
+          git commit -m "textorium ${VERSION}"
+          git push
