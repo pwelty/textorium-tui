@@ -288,6 +288,7 @@ pub fn scan_posts(config: &Config) -> Result<ScanResult> {
 
     for entry in WalkDir::new(&content_path)
         .follow_links(true)
+        .max_depth(20)
         .into_iter()
         .filter_map(|e| e.ok())
     {
@@ -1036,6 +1037,40 @@ mod tests {
         assert!(post.date.is_some());
         let date = post.date.unwrap();
         assert_eq!(date.format("%Y-%m-%d").to_string(), "2025-03-15");
+    }
+
+    #[test]
+    fn test_scan_posts_completes_with_symlink_cycle() {
+        let dir = tempfile::tempdir().unwrap();
+        let content_dir = dir.path().join("content");
+        fs::create_dir_all(&content_dir).unwrap();
+
+        // Create a symlink cycle: content/loop -> content
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(&content_dir, content_dir.join("loop")).unwrap();
+        }
+
+        // Create a valid post so we verify scanning still works
+        fs::write(
+            content_dir.join("test.md"),
+            "---\ntitle: Test\n---\n\nBody.\n",
+        )
+        .unwrap();
+
+        let config = Config {
+            site_path: dir.path().to_string_lossy().to_string(),
+            content_dir: "content".to_string(),
+            ssg: SsgType::Hugo,
+            ..Default::default()
+        };
+
+        // This should complete without hanging thanks to max_depth(20)
+        let result = scan_posts(&config).unwrap();
+        assert!(
+            !result.posts.is_empty(),
+            "Should find at least the test post"
+        );
     }
 
     #[test]
