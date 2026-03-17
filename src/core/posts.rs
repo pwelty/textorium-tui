@@ -8,6 +8,18 @@ use walkdir::WalkDir;
 
 use super::config::{Config, SsgType};
 
+#[derive(Debug, Clone, PartialEq)]
+pub enum FrontmatterFormat {
+    Yaml,
+    Toml,
+}
+
+impl Default for FrontmatterFormat {
+    fn default() -> Self {
+        FrontmatterFormat::Yaml
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Post {
     pub path: PathBuf,
@@ -19,10 +31,13 @@ pub struct Post {
     pub tags: Vec<String>,
     pub content: String,
     pub frontmatter: HashMap<String, serde_json::Value>,
-    /// Raw YAML text between --- delimiters, preserved for lossless save
+    /// Raw frontmatter text between delimiters, preserved for lossless save
     pub raw_frontmatter: String,
     /// Snapshot of frontmatter at load time, used to detect changes on save
     pub original_frontmatter: HashMap<String, serde_json::Value>,
+    /// Whether the frontmatter uses YAML (---) or TOML (+++) delimiters
+    #[serde(skip)]
+    pub format: FrontmatterFormat,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -45,18 +60,74 @@ struct Frontmatter {
     extra: HashMap<String, serde_json::Value>,
 }
 
+/// Convert a toml::Value to serde_json::Value
+fn toml_value_to_json(value: &toml::Value) -> serde_json::Value {
+    match value {
+        toml::Value::String(s) => serde_json::Value::String(s.clone()),
+        toml::Value::Integer(i) => serde_json::json!(*i),
+        toml::Value::Float(f) => serde_json::json!(*f),
+        toml::Value::Boolean(b) => serde_json::Value::Bool(*b),
+        toml::Value::Datetime(dt) => serde_json::Value::String(dt.to_string()),
+        toml::Value::Array(arr) => {
+            serde_json::Value::Array(arr.iter().map(toml_value_to_json).collect())
+        }
+        toml::Value::Table(table) => {
+            let map: serde_json::Map<String, serde_json::Value> = table
+                .iter()
+                .map(|(k, v)| (k.clone(), toml_value_to_json(v)))
+                .collect();
+            serde_json::Value::Object(map)
+        }
+    }
+}
+
 /// Parse frontmatter and body from markdown content
-/// Returns (parsed HashMap, body text, raw YAML text between --- delimiters)
+/// Returns (parsed HashMap, body text, raw frontmatter text, format)
 fn parse_frontmatter(
     content: &str,
-) -> Result<(HashMap<String, serde_json::Value>, String, String)> {
+) -> Result<(HashMap<String, serde_json::Value>, String, String, FrontmatterFormat)> {
+    // Detect TOML frontmatter (+++...+++)
+    if content.starts_with("+++") {
+        let parts: Vec<&str> = content.splitn(3, "+++").collect();
+        if parts.len() < 3 {
+            return Ok((HashMap::new(), content.to_string(), String::new(), FrontmatterFormat::Toml));
+        }
+
+        let raw_toml = parts[1].to_string();
+        let body = parts[2].trim().to_string();
+
+        let toml_table: toml::Table =
+            toml::from_str(parts[1]).context("Failed to parse TOML frontmatter")?;
+
+        // Convert TOML table to serde_json HashMap
+        let mut fm_map: HashMap<String, serde_json::Value> = HashMap::new();
+        for (key, value) in &toml_table {
+            fm_map.insert(key.clone(), toml_value_to_json(value));
+        }
+
+        // Normalize: merge singular "category" into "categories" array (same as YAML path)
+        if let Some(cat) = fm_map.remove("category") {
+            if !fm_map.contains_key("categories") {
+                if let Some(s) = cat.as_str() {
+                    fm_map.insert(
+                        "categories".to_string(),
+                        serde_json::Value::Array(vec![serde_json::Value::String(s.to_string())]),
+                    );
+                }
+            }
+        }
+
+        return Ok((fm_map, body, raw_toml, FrontmatterFormat::Toml));
+    }
+
+    // Detect YAML frontmatter (---...---)
     if !content.starts_with("---") {
-        return Ok((HashMap::new(), content.to_string(), String::new()));
+        return Ok((HashMap::new(), content.to_string(), String::new(), FrontmatterFormat::Yaml));
     }
 
     let parts: Vec<&str> = content.splitn(3, "---").collect();
     if parts.len() < 3 {
-        return Ok((HashMap::new(), content.to_string(), String::new()));
+        return Ok((HashMap::new(), content.to_string(), String::new(), FrontmatterFormat::Yaml));
     }
 
     let raw_yaml = parts[1].to_string();
@@ -116,7 +187,7 @@ fn parse_frontmatter(
         fm_map.insert(key, value);
     }
 
-    Ok((fm_map, body, raw_yaml))
+    Ok((fm_map, body, raw_yaml, FrontmatterFormat::Yaml))
 }
 
 /// Read a single post from a file
@@ -124,7 +195,7 @@ pub fn read_post(path: &Path) -> Result<Post> {
     let content = fs::read_to_string(path)
         .with_context(|| format!("Failed to read post: {}", path.display()))?;
 
-    let (frontmatter, body, raw_yaml) = parse_frontmatter(&content)?;
+    let (frontmatter, body, raw_frontmatter_text, format) = parse_frontmatter(&content)?;
 
     // Extract fields
     let title = frontmatter
@@ -190,7 +261,8 @@ pub fn read_post(path: &Path) -> Result<Post> {
         content: body,
         original_frontmatter: frontmatter.clone(),
         frontmatter,
-        raw_frontmatter: raw_yaml,
+        raw_frontmatter: raw_frontmatter_text,
+        format,
     })
 }
 
@@ -319,20 +391,77 @@ fn find_key_lines(lines: &[&str], key: &str) -> Option<(usize, usize)> {
     Some((start, end))
 }
 
+/// Serialize a serde_json::Value as inline TOML suitable for frontmatter
+fn value_to_toml_inline(value: &serde_json::Value) -> String {
+    match value {
+        serde_json::Value::String(s) => format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\"")),
+        serde_json::Value::Bool(b) => b.to_string(),
+        serde_json::Value::Number(n) => n.to_string(),
+        serde_json::Value::Array(arr) => {
+            let items: Vec<String> = arr.iter().map(value_to_toml_inline).collect();
+            format!("[{}]", items.join(", "))
+        }
+        serde_json::Value::Object(_) | serde_json::Value::Null => {
+            // For complex types, fall back to a simple representation
+            format!("\"{}\"", value)
+        }
+    }
+}
+
+/// Find the line range for a top-level TOML key in raw frontmatter lines.
+/// Returns (start_index, end_index_exclusive) or None if not found.
+fn find_toml_key_lines(lines: &[&str], key: &str) -> Option<(usize, usize)> {
+    let start = lines.iter().position(|line| {
+        let trimmed = line.trim();
+        trimmed.starts_with(key) && {
+            let rest = trimmed[key.len()..].trim_start();
+            rest.starts_with('=')
+        }
+    })?;
+
+    // TOML top-level keys are single-line (no multi-line continuation for simple values)
+    // But arrays/tables can span lines — find next top-level key or end
+    let end = lines[start + 1..]
+        .iter()
+        .position(|line| {
+            let trimmed = line.trim();
+            !trimmed.is_empty() && !trimmed.starts_with('#') && {
+                // A new top-level key: word followed by =
+                if let Some(eq_pos) = trimmed.find('=') {
+                    let before_eq = trimmed[..eq_pos].trim();
+                    !before_eq.is_empty() && before_eq.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '-')
+                } else {
+                    false
+                }
+            }
+        })
+        .map(|pos| start + 1 + pos)
+        .unwrap_or(lines.len());
+
+    Some((start, end))
+}
+
 /// Save a post back to disk, preserving original frontmatter formatting where possible
 pub fn save_post(post: &Post) -> Result<()> {
+    let (open_delim, close_delim) = match post.format {
+        FrontmatterFormat::Yaml => ("---", "---"),
+        FrontmatterFormat::Toml => ("+++", "+++"),
+    };
+
     // If frontmatter is unchanged, write back the original file exactly
     if post.frontmatter == post.original_frontmatter {
-        let full_content = format!("---{}---\n\n{}\n", post.raw_frontmatter, post.content);
+        let full_content = format!("{}{}{}\n\n{}\n", open_delim, post.raw_frontmatter, close_delim, post.content);
         fs::write(&post.path, full_content)
             .with_context(|| format!("Failed to write post: {}", post.path.display()))?;
         return Ok(());
     }
 
-    // Frontmatter was modified — patch the raw YAML
+    // Frontmatter was modified — patch the raw text
     let raw_lines: Vec<&str> = post.raw_frontmatter.lines().collect();
     let mut result_lines: Vec<String> = Vec::new();
     let mut processed_keys: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+    let is_toml = post.format == FrontmatterFormat::Toml;
 
     // Process existing lines, replacing modified values and skipping deleted keys
     let mut i = 0;
@@ -340,41 +469,72 @@ pub fn save_post(post: &Post) -> Result<()> {
         let line = raw_lines[i];
         let trimmed = line.trim();
 
-        // Check if this is a top-level key line
-        if !trimmed.is_empty()
-            && !line.starts_with(' ')
-            && !line.starts_with('\t')
-            && !trimmed.starts_with('-')
-        {
-            if let Some(colon_pos) = trimmed.find(':') {
-                let key = trimmed[..colon_pos].to_string();
+        if is_toml {
+            // TOML: top-level key lines use `key = value`
+            if !trimmed.is_empty() && !trimmed.starts_with('#') {
+                if let Some(eq_pos) = trimmed.find('=') {
+                    let key = trimmed[..eq_pos].trim().to_string();
 
-                if let Some((start, end)) = find_key_lines(&raw_lines, &key) {
-                    if start == i {
-                        processed_keys.insert(key.clone());
+                    if let Some((start, end)) = find_toml_key_lines(&raw_lines, &key) {
+                        if start == i {
+                            processed_keys.insert(key.clone());
 
-                        if let Some(new_value) = post.frontmatter.get(&key) {
-                            // Key still exists — check if value changed
-                            let original_value = post.original_frontmatter.get(&key);
-                            if original_value == Some(new_value) {
-                                // Unchanged — keep original lines
-                                for line in &raw_lines[start..end] {
-                                    result_lines.push(line.to_string());
+                            if let Some(new_value) = post.frontmatter.get(&key) {
+                                let original_value = post.original_frontmatter.get(&key);
+                                if original_value == Some(new_value) {
+                                    for line in &raw_lines[start..end] {
+                                        result_lines.push(line.to_string());
+                                    }
+                                } else {
+                                    result_lines.push(format!(
+                                        "{} = {}",
+                                        key,
+                                        value_to_toml_inline(new_value)
+                                    ));
                                 }
+                                i = end;
+                                continue;
                             } else {
-                                // Changed — write new value inline
-                                result_lines.push(format!(
-                                    "{}: {}",
-                                    key,
-                                    value_to_yaml_inline(new_value)
-                                ));
+                                i = end;
+                                continue;
                             }
-                            i = end;
-                            continue;
-                        } else {
-                            // Key was deleted — skip all its lines
-                            i = end;
-                            continue;
+                        }
+                    }
+                }
+            }
+        } else {
+            // YAML: top-level key lines use `key: value`
+            if !trimmed.is_empty()
+                && !line.starts_with(' ')
+                && !line.starts_with('\t')
+                && !trimmed.starts_with('-')
+            {
+                if let Some(colon_pos) = trimmed.find(':') {
+                    let key = trimmed[..colon_pos].to_string();
+
+                    if let Some((start, end)) = find_key_lines(&raw_lines, &key) {
+                        if start == i {
+                            processed_keys.insert(key.clone());
+
+                            if let Some(new_value) = post.frontmatter.get(&key) {
+                                let original_value = post.original_frontmatter.get(&key);
+                                if original_value == Some(new_value) {
+                                    for line in &raw_lines[start..end] {
+                                        result_lines.push(line.to_string());
+                                    }
+                                } else {
+                                    result_lines.push(format!(
+                                        "{}: {}",
+                                        key,
+                                        value_to_yaml_inline(new_value)
+                                    ));
+                                }
+                                i = end;
+                                continue;
+                            } else {
+                                i = end;
+                                continue;
+                            }
                         }
                     }
                 }
@@ -389,13 +549,17 @@ pub fn save_post(post: &Post) -> Result<()> {
     // Append any new keys that weren't in the original
     for (key, value) in &post.frontmatter {
         if !processed_keys.contains(key) && !post.original_frontmatter.contains_key(key) {
-            result_lines.push(format!("{}: {}", key, value_to_yaml_inline(value)));
+            if is_toml {
+                result_lines.push(format!("{} = {}", key, value_to_toml_inline(value)));
+            } else {
+                result_lines.push(format!("{}: {}", key, value_to_yaml_inline(value)));
+            }
         }
     }
 
     // Reconstruct the file
     let frontmatter_text = result_lines.join("\n");
-    let full_content = format!("---\n{}\n---\n\n{}\n", frontmatter_text, post.content);
+    let full_content = format!("{}\n{}\n{}\n\n{}\n", open_delim, frontmatter_text, close_delim, post.content);
 
     fs::write(&post.path, full_content)
         .with_context(|| format!("Failed to write post: {}", post.path.display()))?;
@@ -786,5 +950,103 @@ mod tests {
             !saved.contains("content_type"),
             "content_type should not be injected into saved file"
         );
+    }
+
+    #[test]
+    fn test_parse_toml_frontmatter() {
+        let content = "+++\ntitle = \"My TOML Post\"\ndate = 2025-01-15T10:00:00Z\ndraft = true\ntags = [\"rust\", \"tui\"]\n+++\n\nBody text.\n";
+        let f = create_temp_post(content);
+        let post = read_post(f.path()).unwrap();
+
+        assert_eq!(post.title, "My TOML Post");
+        assert!(post.draft);
+        assert_eq!(post.tags, vec!["rust", "tui"]);
+        assert!(post.date.is_some());
+        assert_eq!(post.format, FrontmatterFormat::Toml);
+        assert_eq!(post.content, "Body text.");
+    }
+
+    #[test]
+    fn test_save_unchanged_toml_post_is_byte_identical() {
+        let original = "+++\ntitle = \"My TOML Post\"\ndate = 2025-01-15T10:00:00Z\ndraft = false\ntags = [\"rust\", \"tui\"]\n+++\n\nHello world.\n";
+        let f = create_temp_post(original);
+        let post = read_post(f.path()).unwrap();
+
+        save_post(&post).unwrap();
+
+        let saved = fs::read_to_string(f.path()).unwrap();
+        assert_eq!(
+            saved, original,
+            "Unchanged TOML post should be byte-identical after save"
+        );
+    }
+
+    #[test]
+    fn test_save_toml_post_preserves_delimiters() {
+        let original = "+++\ntitle = \"My TOML Post\"\ndraft = true\n+++\n\nBody.\n";
+        let f = create_temp_post(original);
+        let mut post = read_post(f.path()).unwrap();
+
+        post.frontmatter.insert(
+            "title".to_string(),
+            serde_json::Value::String("Updated TOML".to_string()),
+        );
+
+        save_post(&post).unwrap();
+
+        let saved = fs::read_to_string(f.path()).unwrap();
+        assert!(
+            saved.starts_with("+++\n"),
+            "TOML post should preserve +++ delimiters, got: {}",
+            saved
+        );
+        assert!(saved.contains("+++\n\n"), "Should have closing +++ delimiter");
+        assert!(saved.contains("title = \"Updated TOML\""));
+        assert!(!saved.contains("---"), "Should not contain YAML delimiters");
+    }
+
+    #[test]
+    fn test_save_toml_preserves_field_order_on_edit() {
+        let original = "+++\ntitle = \"Original\"\ndate = 2025-01-15T10:00:00Z\ndraft = true\n+++\n\nBody.\n";
+        let f = create_temp_post(original);
+        let mut post = read_post(f.path()).unwrap();
+
+        post.frontmatter.insert(
+            "title".to_string(),
+            serde_json::Value::String("New title".to_string()),
+        );
+
+        save_post(&post).unwrap();
+
+        let saved = fs::read_to_string(f.path()).unwrap();
+        let title_pos = saved.find("title =").unwrap();
+        let date_pos = saved.find("date =").unwrap();
+        assert!(
+            title_pos < date_pos,
+            "Field order should be preserved after edit"
+        );
+    }
+
+    #[test]
+    fn test_toml_datetime_parsed_correctly() {
+        let content = "+++\ntitle = \"Date Test\"\ndate = 2025-03-15T14:30:00Z\n+++\n\nBody.\n";
+        let f = create_temp_post(content);
+        let post = read_post(f.path()).unwrap();
+
+        assert!(post.date.is_some());
+        let date = post.date.unwrap();
+        assert_eq!(date.format("%Y-%m-%d").to_string(), "2025-03-15");
+    }
+
+    #[test]
+    fn test_no_frontmatter_still_works() {
+        let content = "Just plain markdown with no frontmatter.\n";
+        let f = create_temp_post(content);
+        let post = read_post(f.path()).unwrap();
+
+        assert_eq!(post.title, "Untitled");
+        assert!(post.frontmatter.is_empty());
+        assert_eq!(post.format, FrontmatterFormat::Yaml);
+        assert!(post.content.starts_with("Just plain markdown with no frontmatter."));
     }
 }
