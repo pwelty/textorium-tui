@@ -90,6 +90,8 @@ impl App {
     fn set_selected(&mut self, index: usize) {
         self.selected = index;
         self.table_state.select(Some(index));
+        self.content_scroll = 0;
+        self.metadata_selected = 0;
     }
 
     fn dirty_count(&self) -> usize {
