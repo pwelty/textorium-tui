@@ -1057,6 +1057,56 @@ pub async fn run() -> Result<()> {
                             "✓ Refreshed".to_string()
                         };
                     }
+                    KeyCode::Char('u') => {
+                        // Revert selected post to last-saved state
+                        let filtered = app.get_filtered_posts();
+                        if let Some(post_ref) = filtered.get(app.selected) {
+                            let post_path = post_ref.path.clone();
+                            let is_dirty = post_ref.frontmatter != post_ref.original_frontmatter;
+
+                            if !is_dirty {
+                                app.status_message = "No unsaved changes".to_string();
+                            } else if let Some(post) = app.posts.iter_mut().find(|p| p.path == post_path) {
+                                post.frontmatter = post.original_frontmatter.clone();
+
+                                // Re-sync struct fields from reverted frontmatter
+                                post.title = post.frontmatter.get("title")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("Untitled")
+                                    .to_string();
+                                post.date = post.frontmatter.get("date")
+                                    .and_then(|v| v.as_str())
+                                    .and_then(|s| {
+                                        if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(s) {
+                                            return Some(dt.with_timezone(&chrono::Utc));
+                                        }
+                                        if let Ok(naive_date) = chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d") {
+                                            return naive_date.and_hms_opt(0, 0, 0).map(|dt| dt.and_utc());
+                                        }
+                                        None
+                                    });
+                                post.draft = post.frontmatter.get("draft")
+                                    .and_then(|v| v.as_bool())
+                                    .unwrap_or(false);
+                                post.content_type = post.frontmatter.get("content_type")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("")
+                                    .to_string();
+                                post.tags = post.frontmatter.get("tags")
+                                    .and_then(|v| v.as_array())
+                                    .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+                                    .unwrap_or_default();
+                                post.categories = post.frontmatter.get("categories")
+                                    .and_then(|v| v.as_array())
+                                    .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+                                    .unwrap_or_default();
+
+                                let title = post.title.clone();
+                                app.invalidate_filter();
+                                app.status_message = format!("Reverted: {}", title);
+                            }
+                        }
+                    }
                     KeyCode::Char('o') => {
                         // Open current post in browser
                         let filtered = app.get_filtered_posts();
