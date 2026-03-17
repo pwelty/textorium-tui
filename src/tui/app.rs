@@ -38,6 +38,8 @@ pub struct App {
     adding_field: bool,     // Whether we're adding a new field
     new_field_key: String,  // Key name for new field being added
     quit_pending: bool,     // True after first 'q' press with unsaved changes
+    filtered_indices: Vec<usize>, // Cached indices into self.posts after filter+sort
+    filter_dirty: bool,           // True when filtered_indices needs recomputation
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -84,6 +86,8 @@ impl App {
             adding_field: false,
             new_field_key: String::new(),
             quit_pending: false,
+            filtered_indices: Vec::new(),
+            filter_dirty: true,
         })
     }
 
@@ -105,18 +109,27 @@ impl App {
         post.frontmatter != post.original_frontmatter
     }
 
-    fn get_filtered_posts(&self) -> Vec<&Post> {
-        let mut filtered: Vec<&Post> = self.posts.iter().collect();
+    fn invalidate_filter(&mut self) {
+        self.filter_dirty = true;
+    }
+
+    fn ensure_filtered(&mut self) {
+        if !self.filter_dirty {
+            return;
+        }
+
+        let mut indices: Vec<usize> = (0..self.posts.len()).collect();
 
         // Filter drafts
         if self.drafts_only {
-            filtered.retain(|p| p.draft);
+            indices.retain(|&i| self.posts[i].draft);
         }
 
-        // Search: filters by title, content, categories, and tags (case-insensitive substring match)
+        // Search
         if !self.search_query.is_empty() {
             let query = self.search_query.to_lowercase();
-            filtered.retain(|p| {
+            indices.retain(|&i| {
+                let p = &self.posts[i];
                 p.title.to_lowercase().contains(&query)
                     || p.content.to_lowercase().contains(&query)
                     || p.categories
@@ -130,13 +143,21 @@ impl App {
 
         // Sort
         match self.sort_mode {
-            SortMode::DateDesc => filtered.sort_by(|a, b| b.date.cmp(&a.date)),
-            SortMode::DateAsc => filtered.sort_by(|a, b| a.date.cmp(&b.date)),
-            SortMode::TitleAsc => filtered.sort_by(|a, b| a.title.cmp(&b.title)),
-            SortMode::TitleDesc => filtered.sort_by(|a, b| b.title.cmp(&a.title)),
+            SortMode::DateDesc => indices.sort_by(|&a, &b| self.posts[b].date.cmp(&self.posts[a].date)),
+            SortMode::DateAsc => indices.sort_by(|&a, &b| self.posts[a].date.cmp(&self.posts[b].date)),
+            SortMode::TitleAsc => indices.sort_by(|&a, &b| self.posts[a].title.cmp(&self.posts[b].title)),
+            SortMode::TitleDesc => indices.sort_by(|&a, &b| self.posts[b].title.cmp(&self.posts[a].title)),
         }
 
-        filtered
+        self.filtered_indices = indices;
+        self.filter_dirty = false;
+    }
+
+    fn get_filtered_posts(&self) -> Vec<&Post> {
+        self.filtered_indices
+            .iter()
+            .map(|&i| &self.posts[i])
+            .collect()
     }
 
     fn select_next(&mut self) {
@@ -174,11 +195,13 @@ impl App {
             SortMode::TitleAsc => SortMode::TitleDesc,
             SortMode::TitleDesc => SortMode::DateDesc,
         };
+        self.invalidate_filter();
         self.set_selected(0);
     }
 
     fn toggle_drafts(&mut self) {
         self.drafts_only = !self.drafts_only;
+        self.invalidate_filter();
         self.set_selected(0);
     }
 
@@ -600,6 +623,7 @@ pub async fn run() -> Result<()> {
 
     // Main loop
     loop {
+        app.ensure_filtered();
         terminal.draw(|f| ui(f, &mut app))?;
 
         if let Event::Key(key) = event::read()? {
@@ -618,10 +642,12 @@ pub async fn run() -> Result<()> {
                 match key.code {
                     KeyCode::Char(c) => {
                         app.search_query.push(c);
+                        app.invalidate_filter();
                         app.set_selected(0); // Reset selection when search changes
                     }
                     KeyCode::Backspace => {
                         app.search_query.pop();
+                        app.invalidate_filter();
                         app.set_selected(0);
                     }
                     KeyCode::Esc | KeyCode::Enter => {
@@ -741,6 +767,7 @@ pub async fn run() -> Result<()> {
                                             }
                                             _ => {}
                                         }
+                                        app.invalidate_filter();
                                     }
                                 }
                             }
@@ -935,6 +962,8 @@ pub async fn run() -> Result<()> {
                                 let result = scan_posts(&app.config)?;
                                 let err_count = result.errors.len();
                                 app.posts = result.posts;
+                                app.invalidate_filter();
+                                app.ensure_filtered();
                                 let max = app.get_filtered_posts().len().saturating_sub(1);
                                 if app.selected > max {
                                     app.set_selected(max);
@@ -1013,6 +1042,8 @@ pub async fn run() -> Result<()> {
                         let result = scan_posts(&app.config)?;
                         let err_count = result.errors.len();
                         app.posts = result.posts;
+                        app.invalidate_filter();
+                        app.ensure_filtered();
                         let max = app.get_filtered_posts().len().saturating_sub(1);
                         if app.selected > max {
                             app.set_selected(max);
@@ -1052,6 +1083,7 @@ pub async fn run() -> Result<()> {
                         // Enter search mode
                         app.search_mode = true;
                         app.search_query.clear();
+                        app.invalidate_filter();
                         app.set_selected(0);
                         app.status_message = "Search mode: type to filter posts".to_string();
                     }
@@ -1059,6 +1091,7 @@ pub async fn run() -> Result<()> {
                         // Clear search if active
                         if !app.search_query.is_empty() {
                             app.search_query.clear();
+                            app.invalidate_filter();
                             app.set_selected(0);
                             app.status_message = "Search cleared".to_string();
                         }
