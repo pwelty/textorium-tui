@@ -32,7 +32,7 @@ struct Frontmatter {
     #[serde(default)]
     date: Option<String>,
     #[serde(default)]
-    draft: bool,
+    draft: Option<bool>,
     #[serde(default)]
     content_type: String,
     #[serde(default)]
@@ -77,14 +77,16 @@ fn parse_frontmatter(
         fm_map.insert("date".to_string(), serde_json::Value::String(date.clone()));
     }
 
-    fm_map.insert(
-        "draft".to_string(),
-        serde_json::Value::Bool(frontmatter.draft),
-    );
-    fm_map.insert(
-        "content_type".to_string(),
-        serde_json::Value::String(frontmatter.content_type.clone()),
-    );
+    if let Some(draft) = frontmatter.draft {
+        fm_map.insert("draft".to_string(), serde_json::Value::Bool(draft));
+    }
+
+    if !frontmatter.content_type.is_empty() {
+        fm_map.insert(
+            "content_type".to_string(),
+            serde_json::Value::String(frontmatter.content_type.clone()),
+        );
+    }
 
     if !frontmatter.categories.is_empty() {
         let cats: Vec<serde_json::Value> = frontmatter
@@ -749,5 +751,40 @@ mod tests {
         assert!(saved.contains("title: Updated title"));
         assert!(saved.contains("draft: false"));
         assert!(saved.contains("date: 2025-01-15"));
+    }
+
+    #[test]
+    fn test_save_does_not_inject_phantom_fields() {
+        let original = "---\ntitle: Minimal post\n---\n\nJust a body.\n";
+        let f = create_temp_post(original);
+        let mut post = read_post(f.path()).unwrap();
+
+        // Verify phantom fields are NOT in the frontmatter HashMap
+        assert!(
+            !post.frontmatter.contains_key("draft"),
+            "draft should not be in frontmatter when absent from source"
+        );
+        assert!(
+            !post.frontmatter.contains_key("content_type"),
+            "content_type should not be in frontmatter when absent from source"
+        );
+
+        // Edit a different field to trigger the diff path in save_post
+        post.frontmatter.insert(
+            "title".to_string(),
+            serde_json::Value::String("Updated minimal".to_string()),
+        );
+        save_post(&post).unwrap();
+
+        let saved = fs::read_to_string(f.path()).unwrap();
+        assert!(saved.contains("title: Updated minimal"));
+        assert!(
+            !saved.contains("draft"),
+            "draft should not be injected into saved file"
+        );
+        assert!(
+            !saved.contains("content_type"),
+            "content_type should not be injected into saved file"
+        );
     }
 }
