@@ -923,6 +923,10 @@ pub async fn run() -> Result<()> {
                                 let result = scan_posts(&app.config)?;
                                 let err_count = result.errors.len();
                                 app.posts = result.posts;
+                                let max = app.get_filtered_posts().len().saturating_sub(1);
+                                if app.selected > max {
+                                    app.set_selected(max);
+                                }
                                 app.status_message = if err_count > 0 {
                                     format!(
                                         "✓ Reloaded after edit ({} files skipped)",
@@ -997,6 +1001,10 @@ pub async fn run() -> Result<()> {
                         let result = scan_posts(&app.config)?;
                         let err_count = result.errors.len();
                         app.posts = result.posts;
+                        let max = app.get_filtered_posts().len().saturating_sub(1);
+                        if app.selected > max {
+                            app.set_selected(max);
+                        }
                         app.status_message = if err_count > 0 {
                             format!(
                                 "✓ Refreshed ({} files skipped due to parse errors)",
