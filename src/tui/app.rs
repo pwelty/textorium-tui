@@ -729,6 +729,16 @@ pub async fn run() -> Result<()> {
                                             }
                                             "tags" => actual_post.tags = parsed_list(),
                                             "categories" => actual_post.categories = parsed_list(),
+                                            "date" => {
+                                                let s = app.edit_buffer.as_str();
+                                                actual_post.date = if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(s) {
+                                                    Some(dt.with_timezone(&chrono::Utc))
+                                                } else if let Ok(naive_date) = chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d") {
+                                                    naive_date.and_hms_opt(0, 0, 0).map(|dt| dt.and_utc())
+                                                } else {
+                                                    None
+                                                };
+                                            }
                                             _ => {}
                                         }
                                     }
