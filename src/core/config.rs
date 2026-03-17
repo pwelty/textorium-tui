@@ -84,10 +84,10 @@ impl Config {
     /// Get the preview URL for a post
     /// Constructs the URL by combining the SSG dev server URL with the post's relative path
     pub fn preview_url(&self, post_path: &Path) -> Option<String> {
-        let site_path = PathBuf::from(&self.site_path);
+        let content_path = self.content_path();
 
-        // Get path relative to site root
-        let relative_path = post_path.strip_prefix(&site_path).ok()?;
+        // Get path relative to content directory (not site root)
+        let relative_path = post_path.strip_prefix(&content_path).ok()?;
 
         // Convert to URL path (remove .md extension, convert to forward slashes)
         let url_path = relative_path
@@ -95,9 +95,9 @@ impl Config {
             .to_string_lossy()
             .replace('\\', "/");
 
-        // Construct full URL
+        // Construct full URL with trailing slash for pretty URLs
         let base_url = self.ssg.dev_server_url();
-        Some(format!("{}/{}", base_url, url_path))
+        Some(format!("{}/{}/", base_url, url_path))
     }
 }
 
