@@ -756,32 +756,49 @@ pub async fn run() -> Result<()> {
                         continue;
                     }
                     KeyCode::Char('s') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                        // Save current post to disk
-                        let save_path = {
-                            let filtered = app.get_filtered_posts();
-                            filtered.get(app.selected).map(|p| p.path.clone())
-                        };
-                        if let Some(path) = save_path {
-                            if let Some(actual_post) =
-                                app.posts.iter_mut().find(|p| p.path == path)
-                            {
-                                match save_post(actual_post) {
-                                    Ok(_) => {
-                                        // Update baseline so subsequent saves use correct diff
-                                        if let Ok(reloaded) = read_post(&actual_post.path) {
-                                            actual_post.original_frontmatter =
-                                                reloaded.original_frontmatter;
-                                            actual_post.raw_frontmatter =
-                                                reloaded.raw_frontmatter;
+                        // Save all dirty posts to disk
+                        let dirty_paths: Vec<std::path::PathBuf> = app
+                            .posts
+                            .iter()
+                            .filter(|p| p.frontmatter != p.original_frontmatter)
+                            .map(|p| p.path.clone())
+                            .collect();
+
+                        if dirty_paths.is_empty() {
+                            app.status_message = "No unsaved changes".to_string();
+                        } else {
+                            let mut saved = 0usize;
+                            let mut errors = 0usize;
+                            for path in &dirty_paths {
+                                if let Some(post) =
+                                    app.posts.iter_mut().find(|p| &p.path == path)
+                                {
+                                    match save_post(post) {
+                                        Ok(_) => {
+                                            if let Ok(reloaded) = read_post(&post.path) {
+                                                post.original_frontmatter =
+                                                    reloaded.original_frontmatter;
+                                                post.raw_frontmatter =
+                                                    reloaded.raw_frontmatter;
+                                            }
+                                            saved += 1;
                                         }
-                                        app.status_message =
-                                            format!("✓ Saved: {}", actual_post.path.display());
-                                    }
-                                    Err(e) => {
-                                        app.status_message = format!("✗ Error saving: {}", e);
+                                        Err(_) => {
+                                            errors += 1;
+                                        }
                                     }
                                 }
                             }
+                            app.status_message = if errors > 0 {
+                                format!(
+                                    "✓ Saved {} post(s), ✗ {} error(s)",
+                                    saved, errors
+                                )
+                            } else if saved == 1 {
+                                format!("✓ Saved: {}", dirty_paths[0].display())
+                            } else {
+                                format!("✓ Saved {} posts", saved)
+                            };
                         }
                     }
                     KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
