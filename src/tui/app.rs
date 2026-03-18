@@ -28,6 +28,8 @@ pub struct App {
     focused_pane: usize,      // 0=posts, 1=metadata, 2=content
     metadata_selected: usize, // Selected field in metadata pane
     content_scroll: usize,    // Scroll offset in content pane
+    content_area_width: u16,  // Inner width of content pane (for wrapped line count)
+    content_area_height: u16, // Inner height of content pane (for scroll max)
     search_query: String,
     search_mode: bool,
     sort_mode: SortMode,
@@ -77,6 +79,8 @@ impl App {
             focused_pane: 0,
             metadata_selected: 0,
             content_scroll: 0,
+            content_area_width: 0,
+            content_area_height: 0,
             search_query: String::new(),
             search_mode: false,
             sort_mode: SortMode::DateDesc,
@@ -568,6 +572,10 @@ fn ui(f: &mut Frame, app: &mut App) {
             Style::default()
         });
 
+    // Store content pane dimensions for scroll max calculation
+    app.content_area_width = right_chunks[1].width.saturating_sub(2);
+    app.content_area_height = right_chunks[1].height.saturating_sub(2);
+
     let content = Paragraph::new(content_text)
         .block(content_block)
         .wrap(Wrap { trim: false })
@@ -922,11 +930,22 @@ pub async fn run() -> Result<()> {
                                 }
                             }
                             2 => {
-                                // Content pane - scroll down
+                                // Content pane - scroll down (visual wrapped lines)
                                 let filtered = app.get_filtered_posts();
                                 if let Some(post) = filtered.get(app.selected) {
-                                    let line_count = post.content.lines().count();
-                                    if app.content_scroll < line_count.saturating_sub(1) {
+                                    let width = app.content_area_width as usize;
+                                    let visual_lines: usize = if width == 0 {
+                                        post.content.lines().count()
+                                    } else {
+                                        post.content.lines()
+                                            .map(|line| {
+                                                let len = line.len();
+                                                if len == 0 { 1 } else { (len + width - 1) / width }
+                                            })
+                                            .sum()
+                                    };
+                                    let max_scroll = visual_lines.saturating_sub(app.content_area_height as usize);
+                                    if app.content_scroll < max_scroll {
                                         app.content_scroll += 1;
                                     }
                                 }
