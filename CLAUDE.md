@@ -27,7 +27,7 @@ src/
 
 ### Key components
 
-**`core/config.rs`** — Manages site configuration stored in `~/.config/textorium/config.toml`. Auto-detects SSG type from directory structure and config files. Stores site path, detected type, and dev server URL.
+**`core/config.rs`** — Manages site configuration stored in `~/.config/textorium/config.json`. Auto-detects SSG type from directory structure and config files. Stores site path, detected type, and dev server URL.
 
 **`core/posts.rs`** — Scans content directories for `.md` files. Parses YAML frontmatter via serde_yaml. Extracts title, date, draft status, tags, categories. SSG-aware: Hugo scans `content/`, Jekyll scans `_posts/` + `_drafts/`, Eleventy scans everything.
 
@@ -39,7 +39,7 @@ src/
 
 1. `main.rs` → parses CLI args via `cli.rs`
 2. If no subcommand → launches TUI
-3. TUI loads config from `~/.config/textorium/config.toml`
+3. TUI loads config from `~/.config/textorium/config.json`
 4. Scans site directory via `posts.rs` (SSG-aware scanning)
 5. Renders three-pane UI via ratatui
 6. User edits → modifies in-memory post data
