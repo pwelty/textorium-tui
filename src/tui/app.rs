@@ -9,7 +9,7 @@ use ratatui::{
     layout::{Constraint, Direction, Layout},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Cell, Paragraph, Row, Table, TableState, Wrap},
+    widgets::{Block, Borders, Cell, Clear, Paragraph, Row, Table, TableState, Wrap},
     Frame, Terminal,
 };
 use std::io;
@@ -40,6 +40,7 @@ pub struct App {
     quit_pending: bool,     // True after first 'q' press with unsaved changes
     filtered_indices: Vec<usize>, // Cached indices into self.posts after filter+sort
     filter_dirty: bool,           // True when filtered_indices needs recomputation
+    show_help: bool,              // Whether the help overlay is visible
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -88,6 +89,7 @@ impl App {
             quit_pending: false,
             filtered_indices: Vec::new(),
             filter_dirty: true,
+            show_help: false,
         })
     }
 
@@ -594,12 +596,64 @@ fn ui(f: &mut Frame, app: &mut App) {
             app.get_filtered_posts().len()
         )
     } else if app.focused_pane == 1 {
-        format!("q: quit | j/k: navigate | Enter: edit/add | d: delete field | Ctrl+S: save | Tab: switch panes | s: sort | f: filter | /: search | o: preview | r: refresh{}", dirty_suffix)
+        format!("q: quit | j/k: navigate | Enter: edit/add | d: delete | u: revert | Ctrl+S: save | Tab: panes | ?: help{}", dirty_suffix)
     } else {
-        format!("q: quit | j/k: navigate | Tab/h/l: switch panes | Enter: edit (meta) or open editor (content) | Ctrl+S: save | s: sort | f: filter | /: search | o: preview | r: refresh{}", dirty_suffix)
+        format!("q: quit | j/k: navigate | Tab/h/l: panes | Ctrl+S: save | s: sort | f: filter | /: search | o: preview | ?: help{}", dirty_suffix)
     };
     let status_bar = Paragraph::new(status_text).style(Style::default().fg(Color::Gray));
     f.render_widget(status_bar, main_chunks[1]);
+
+    // Help overlay
+    if app.show_help {
+        let area = f.area();
+        // Center the overlay: 60 wide, 28 tall (or fit to terminal)
+        let overlay_width = 56u16.min(area.width.saturating_sub(4));
+        let overlay_height = 28u16.min(area.height.saturating_sub(2));
+        let x = (area.width.saturating_sub(overlay_width)) / 2;
+        let y = (area.height.saturating_sub(overlay_height)) / 2;
+        let overlay_area = ratatui::layout::Rect::new(x, y, overlay_width, overlay_height);
+
+        let help_text = vec![
+            Line::from(Span::styled("Global", Style::default().add_modifier(Modifier::BOLD))),
+            Line::from("  ?             Toggle this help"),
+            Line::from("  q             Quit (confirms if unsaved)"),
+            Line::from("  Ctrl+S        Save all changes"),
+            Line::from("  Ctrl+C        Quit (confirms if unsaved)"),
+            Line::from("  Tab / h / l   Switch panes"),
+            Line::from("  /             Search posts"),
+            Line::from("  s             Cycle sort mode"),
+            Line::from("  f             Toggle drafts-only filter"),
+            Line::from("  r             Refresh from disk"),
+            Line::from("  o             Open in browser"),
+            Line::from(""),
+            Line::from(Span::styled("Posts pane", Style::default().add_modifier(Modifier::BOLD))),
+            Line::from("  j / k         Navigate up/down"),
+            Line::from("  Ctrl+D        Page down"),
+            Line::from("  Ctrl+U        Page up"),
+            Line::from(""),
+            Line::from(Span::styled("Metadata pane", Style::default().add_modifier(Modifier::BOLD))),
+            Line::from("  j / k         Navigate fields"),
+            Line::from("  Enter         Edit field / add new field"),
+            Line::from("  d             Delete field"),
+            Line::from("  u             Revert post changes"),
+            Line::from(""),
+            Line::from(Span::styled("Content pane", Style::default().add_modifier(Modifier::BOLD))),
+            Line::from("  j / k         Scroll up/down"),
+            Line::from("  Enter         Open in $EDITOR"),
+        ];
+
+        let help_block = Block::default()
+            .title(" Help — press ? or Esc to close ")
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::Cyan));
+
+        let help_paragraph = Paragraph::new(help_text)
+            .block(help_block)
+            .style(Style::default().fg(Color::White));
+
+        f.render_widget(Clear, overlay_area);
+        f.render_widget(help_paragraph, overlay_area);
+    }
 }
 
 pub async fn run() -> Result<()> {
@@ -627,6 +681,15 @@ pub async fn run() -> Result<()> {
         terminal.draw(|f| ui(f, &mut app))?;
 
         if let Event::Key(key) = event::read()? {
+            // Help overlay intercepts all keys
+            if app.show_help {
+                match key.code {
+                    KeyCode::Char('?') | KeyCode::Esc => app.show_help = false,
+                    _ => {}
+                }
+                continue;
+            }
+
             // Clear status message on any key press (except when saving)
             if !key.modifiers.contains(KeyModifiers::CONTROL) || key.code != KeyCode::Char('s') {
                 app.status_message.clear();
@@ -1081,6 +1144,9 @@ pub async fn run() -> Result<()> {
                                     "✗ Could not construct preview URL".to_string();
                             }
                         }
+                    }
+                    KeyCode::Char('?') => {
+                        app.show_help = true;
                     }
                     KeyCode::Char('/') => {
                         // Enter search mode
