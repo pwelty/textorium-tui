@@ -780,6 +780,7 @@ pub async fn run() -> Result<()> {
                         } else {
                             let mut saved = 0usize;
                             let mut errors = 0usize;
+                            let mut first_error: Option<String> = None;
                             for path in &dirty_paths {
                                 if let Some(post) =
                                     app.posts.iter_mut().find(|p| &p.path == path)
@@ -794,17 +795,28 @@ pub async fn run() -> Result<()> {
                                             }
                                             saved += 1;
                                         }
-                                        Err(_) => {
+                                        Err(e) => {
+                                            if first_error.is_none() {
+                                                first_error = Some(format!("{}", e));
+                                            }
                                             errors += 1;
                                         }
                                     }
                                 }
                             }
                             app.status_message = if errors > 0 {
-                                format!(
-                                    "✓ Saved {} post(s), ✗ {} error(s)",
-                                    saved, errors
-                                )
+                                let err_detail = first_error.as_deref().unwrap_or("unknown error");
+                                if saved > 0 {
+                                    match errors {
+                                        1 => format!("✓ Saved {}, ✗ 1 error: {}", saved, err_detail),
+                                        n => format!("✓ Saved {}, ✗ {} errors (first: {})", saved, n, err_detail),
+                                    }
+                                } else {
+                                    match errors {
+                                        1 => format!("✗ 1 error: {}", err_detail),
+                                        n => format!("✗ {} errors (first: {})", n, err_detail),
+                                    }
+                                }
                             } else if saved == 1 {
                                 format!("✓ Saved: {}", dirty_paths[0].display())
                             } else {
