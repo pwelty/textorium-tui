@@ -190,6 +190,46 @@ fn parse_frontmatter(
     Ok((fm_map, body, raw_yaml, FrontmatterFormat::Yaml))
 }
 
+/// Parse a date string, trying RFC 3339 first then ISO date format
+pub fn parse_date_string(s: &str) -> Option<DateTime<Utc>> {
+    if let Ok(dt) = DateTime::parse_from_rfc3339(s) {
+        return Some(dt.with_timezone(&Utc));
+    }
+    if let Ok(naive_date) = chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d") {
+        return naive_date.and_hms_opt(0, 0, 0).map(|dt| dt.and_utc());
+    }
+    None
+}
+
+impl Post {
+    /// Sync struct fields (title, date, draft, etc.) from the frontmatter HashMap.
+    /// Call after any mutation to frontmatter to keep struct fields consistent.
+    pub fn sync_fields_from_frontmatter(&mut self) {
+        self.title = self.frontmatter.get("title")
+            .and_then(|v| v.as_str())
+            .unwrap_or("Untitled")
+            .to_string();
+        self.date = self.frontmatter.get("date")
+            .and_then(|v| v.as_str())
+            .and_then(parse_date_string);
+        self.draft = self.frontmatter.get("draft")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        self.content_type = self.frontmatter.get("content_type")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        self.tags = self.frontmatter.get("tags")
+            .and_then(|v| v.as_array())
+            .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+            .unwrap_or_default();
+        self.categories = self.frontmatter.get("categories")
+            .and_then(|v| v.as_array())
+            .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+            .unwrap_or_default();
+    }
+}
+
 /// Read a single post from a file
 pub fn read_post(path: &Path) -> Result<Post> {
     let content = fs::read_to_string(path)
@@ -197,73 +237,22 @@ pub fn read_post(path: &Path) -> Result<Post> {
 
     let (frontmatter, body, raw_frontmatter_text, format) = parse_frontmatter(&content)?;
 
-    // Extract fields
-    let title = frontmatter
-        .get("title")
-        .and_then(|v| v.as_str())
-        .unwrap_or("Untitled")
-        .to_string();
-
-    let date = frontmatter
-        .get("date")
-        .and_then(|v| v.as_str())
-        .and_then(|s| {
-            // Try RFC 3339 first (2023-07-08T00:00:00Z)
-            if let Ok(dt) = DateTime::parse_from_rfc3339(s) {
-                return Some(dt.with_timezone(&Utc));
-            }
-            // Try ISO date format (2023-07-08)
-            if let Ok(naive_date) = chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d") {
-                return Some(naive_date.and_hms_opt(0, 0, 0)?.and_utc());
-            }
-            None
-        });
-
-    let draft = frontmatter
-        .get("draft")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false);
-
-    let content_type = frontmatter
-        .get("content_type")
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .to_string();
-
-    let categories = frontmatter
-        .get("categories")
-        .and_then(|v| v.as_array())
-        .map(|arr| {
-            arr.iter()
-                .filter_map(|v| v.as_str().map(String::from))
-                .collect()
-        })
-        .unwrap_or_default();
-
-    let tags = frontmatter
-        .get("tags")
-        .and_then(|v| v.as_array())
-        .map(|arr| {
-            arr.iter()
-                .filter_map(|v| v.as_str().map(String::from))
-                .collect()
-        })
-        .unwrap_or_default();
-
-    Ok(Post {
+    let mut post = Post {
         path: path.to_path_buf(),
-        title,
-        date,
-        draft,
-        content_type,
-        categories,
-        tags,
+        title: String::new(),
+        date: None,
+        draft: false,
+        content_type: String::new(),
+        categories: Vec::new(),
+        tags: Vec::new(),
         content: body,
         original_frontmatter: frontmatter.clone(),
         frontmatter,
         raw_frontmatter: raw_frontmatter_text,
         format,
-    })
+    };
+    post.sync_fields_from_frontmatter();
+    Ok(post)
 }
 
 /// Result of scanning posts: successful posts and any parse errors

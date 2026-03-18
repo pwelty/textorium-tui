@@ -737,36 +737,8 @@ pub async fn run() -> Result<()> {
 
                                         actual_post.frontmatter.insert(key.clone(), new_value);
 
-                                        // Update struct fields for special keys
-                                        let parsed_list = || -> Vec<String> {
-                                            app.edit_buffer
-                                                .split(',')
-                                                .map(|s| s.trim().to_string())
-                                                .filter(|s| !s.is_empty())
-                                                .collect()
-                                        };
-                                        match key.as_str() {
-                                            "title" => actual_post.title = app.edit_buffer.clone(),
-                                            "draft" => {
-                                                actual_post.draft = app.edit_buffer == "true"
-                                            }
-                                            "content_type" | "type" => {
-                                                actual_post.content_type = app.edit_buffer.clone()
-                                            }
-                                            "tags" => actual_post.tags = parsed_list(),
-                                            "categories" => actual_post.categories = parsed_list(),
-                                            "date" => {
-                                                let s = app.edit_buffer.as_str();
-                                                actual_post.date = if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(s) {
-                                                    Some(dt.with_timezone(&chrono::Utc))
-                                                } else if let Ok(naive_date) = chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d") {
-                                                    naive_date.and_hms_opt(0, 0, 0).map(|dt| dt.and_utc())
-                                                } else {
-                                                    None
-                                                };
-                                            }
-                                            _ => {}
-                                        }
+                                        // Sync struct fields from updated frontmatter
+                                        actual_post.sync_fields_from_frontmatter();
                                         app.invalidate_filter();
                                     }
                                 }
@@ -1068,38 +1040,7 @@ pub async fn run() -> Result<()> {
                                 app.status_message = "No unsaved changes".to_string();
                             } else if let Some(post) = app.posts.iter_mut().find(|p| p.path == post_path) {
                                 post.frontmatter = post.original_frontmatter.clone();
-
-                                // Re-sync struct fields from reverted frontmatter
-                                post.title = post.frontmatter.get("title")
-                                    .and_then(|v| v.as_str())
-                                    .unwrap_or("Untitled")
-                                    .to_string();
-                                post.date = post.frontmatter.get("date")
-                                    .and_then(|v| v.as_str())
-                                    .and_then(|s| {
-                                        if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(s) {
-                                            return Some(dt.with_timezone(&chrono::Utc));
-                                        }
-                                        if let Ok(naive_date) = chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d") {
-                                            return naive_date.and_hms_opt(0, 0, 0).map(|dt| dt.and_utc());
-                                        }
-                                        None
-                                    });
-                                post.draft = post.frontmatter.get("draft")
-                                    .and_then(|v| v.as_bool())
-                                    .unwrap_or(false);
-                                post.content_type = post.frontmatter.get("content_type")
-                                    .and_then(|v| v.as_str())
-                                    .unwrap_or("")
-                                    .to_string();
-                                post.tags = post.frontmatter.get("tags")
-                                    .and_then(|v| v.as_array())
-                                    .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
-                                    .unwrap_or_default();
-                                post.categories = post.frontmatter.get("categories")
-                                    .and_then(|v| v.as_array())
-                                    .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
-                                    .unwrap_or_default();
+                                post.sync_fields_from_frontmatter();
 
                                 let title = post.title.clone();
                                 app.invalidate_filter();
