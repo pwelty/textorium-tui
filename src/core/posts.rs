@@ -704,18 +704,18 @@ fn is_opening_context(chars: &[char], i: usize) -> bool {
     prev.is_whitespace() || matches!(prev, '(' | '[' | '{' | '\u{2014}' | '\u{2013}' | '\n')
 }
 
-/// Reverse smart quote conversion: curly quotes back to straight, em dash to --, ellipsis to ...
-pub fn straightquotes(text: &str) -> String {
-    text.replace('\u{201C}', "\"")
-        .replace('\u{201D}', "\"")
-        .replace('\u{2018}', "'")
-        .replace('\u{2019}', "'")
-        .replace('\u{2014}', "--")
-        .replace('\u{2026}', "...")
-}
-
 #[cfg(test)]
 mod tests {
+    /// Reverse smart quote conversion: curly quotes back to straight, em dash to --, ellipsis to ...
+    fn straightquotes(text: &str) -> String {
+        text.replace('\u{201C}', "\"")
+            .replace('\u{201D}', "\"")
+            .replace('\u{2018}', "'")
+            .replace('\u{2019}', "'")
+            .replace('\u{2014}', "--")
+            .replace('\u{2026}', "...")
+    }
+
     use super::*;
     use std::io::Write;
     use tempfile::NamedTempFile;

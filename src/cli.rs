@@ -76,11 +76,11 @@ pub enum Commands {
     },
 }
 
-pub async fn run(cli: Cli) -> Result<()> {
+pub fn run(cli: Cli) -> Result<()> {
     match cli.command {
         None => {
             // No subcommand = launch TUI
-            crate::tui::app::run().await?;
+            crate::tui::app::run()?;
         }
         Some(Commands::Use { path }) => {
             crate::core::config::configure_site(&path)?;
