@@ -623,6 +623,97 @@ fn slugify(title: &str) -> String {
         .join("-")
 }
 
+/// Convert straight quotes to typographically correct curly/smart quotes.
+/// Also converts `--` to em dash and `...` to ellipsis.
+/// Skips conversion inside code spans (backtick-delimited).
+pub fn smartquotes(text: &str) -> String {
+    let mut result = String::with_capacity(text.len());
+    let chars: Vec<char> = text.chars().collect();
+    let len = chars.len();
+    let mut i = 0;
+    let mut in_code = false;
+
+    while i < len {
+        let ch = chars[i];
+
+        // Toggle code span tracking
+        if ch == '`' {
+            in_code = !in_code;
+            result.push(ch);
+            i += 1;
+            continue;
+        }
+
+        // Skip conversion inside code spans
+        if in_code {
+            result.push(ch);
+            i += 1;
+            continue;
+        }
+
+        // Ellipsis: ... → …
+        if ch == '.' && i + 2 < len && chars[i + 1] == '.' && chars[i + 2] == '.' {
+            result.push('\u{2026}');
+            i += 3;
+            continue;
+        }
+
+        // Em dash: -- → —
+        if ch == '-' && i + 1 < len && chars[i + 1] == '-' {
+            result.push('\u{2014}');
+            i += 2;
+            continue;
+        }
+
+        // Double quotes
+        if ch == '"' {
+            if is_opening_context(&chars, i) {
+                result.push('\u{201C}'); // left double quote
+            } else {
+                result.push('\u{201D}'); // right double quote
+            }
+            i += 1;
+            continue;
+        }
+
+        // Single quotes / apostrophes
+        if ch == '\'' {
+            if is_opening_context(&chars, i) {
+                result.push('\u{2018}'); // left single quote
+            } else {
+                result.push('\u{2019}'); // right single quote / apostrophe
+            }
+            i += 1;
+            continue;
+        }
+
+        result.push(ch);
+        i += 1;
+    }
+
+    result
+}
+
+/// Returns true if a quote at position `i` should be an opening quote.
+/// Opening context: start of string, after whitespace, or after opening punctuation.
+fn is_opening_context(chars: &[char], i: usize) -> bool {
+    if i == 0 {
+        return true;
+    }
+    let prev = chars[i - 1];
+    prev.is_whitespace() || matches!(prev, '(' | '[' | '{' | '\u{2014}' | '\u{2013}' | '\n')
+}
+
+/// Reverse smart quote conversion: curly quotes back to straight, em dash to --, ellipsis to ...
+pub fn straightquotes(text: &str) -> String {
+    text.replace('\u{201C}', "\"")
+        .replace('\u{201D}', "\"")
+        .replace('\u{2018}', "'")
+        .replace('\u{2019}', "'")
+        .replace('\u{2014}', "--")
+        .replace('\u{2026}', "...")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1072,5 +1163,53 @@ mod tests {
         assert!(post.frontmatter.is_empty());
         assert_eq!(post.format, FrontmatterFormat::Yaml);
         assert!(post.content.starts_with("Just plain markdown with no frontmatter."));
+    }
+
+    #[test]
+    fn test_smartquotes_double_quotes() {
+        assert_eq!(
+            smartquotes(r#"He said "hello" to her"#),
+            "He said \u{201C}hello\u{201D} to her"
+        );
+    }
+
+    #[test]
+    fn test_smartquotes_apostrophe_contraction() {
+        assert_eq!(smartquotes("don't"), "don\u{2019}t");
+        assert_eq!(smartquotes("it's"), "it\u{2019}s");
+    }
+
+    #[test]
+    fn test_smartquotes_nested_quotes() {
+        assert_eq!(
+            smartquotes(r#"She said "he said 'hello'""#),
+            "She said \u{201C}he said \u{2018}hello\u{2019}\u{201D}"
+        );
+    }
+
+    #[test]
+    fn test_smartquotes_code_span_skip() {
+        assert_eq!(
+            smartquotes(r#"use `"raw"` here"#),
+            "use `\"raw\"` here"
+        );
+    }
+
+    #[test]
+    fn test_smartquotes_em_dash() {
+        assert_eq!(smartquotes("word--word"), "word\u{2014}word");
+    }
+
+    #[test]
+    fn test_smartquotes_ellipsis() {
+        assert_eq!(smartquotes("wait..."), "wait\u{2026}");
+    }
+
+    #[test]
+    fn test_straightquotes_roundtrip() {
+        let input = r#"He said "don't wait..." -- she replied"#;
+        let smart = smartquotes(input);
+        assert_ne!(smart, input);
+        assert_eq!(straightquotes(&smart), input);
     }
 }

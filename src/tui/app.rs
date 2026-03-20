@@ -17,7 +17,7 @@ use std::process::Command;
 
 use crate::core::{
     config::Config,
-    posts::{read_post, save_post, scan_posts, Post, ScanResult},
+    posts::{read_post, save_post, scan_posts, smartquotes, Post, ScanResult},
 };
 
 pub struct App {
@@ -648,6 +648,7 @@ fn ui(f: &mut Frame, app: &mut App) {
             Line::from(Span::styled("Content pane", Style::default().add_modifier(Modifier::BOLD))),
             Line::from("  j / k         Scroll up/down"),
             Line::from("  Enter         Open in $EDITOR"),
+            Line::from("  Q             Apply smart quotes"),
         ];
 
         let help_block = Block::default()
@@ -1166,6 +1167,16 @@ pub async fn run() -> Result<()> {
                     }
                     KeyCode::Char('?') => {
                         app.show_help = true;
+                    }
+                    KeyCode::Char('Q') => {
+                        if app.focused_pane == 2 {
+                            if let Some(idx) = app.filtered_indices.get(app.selected).copied() {
+                                let post = &mut app.posts[idx];
+                                post.content = smartquotes(&post.content);
+                                app.invalidate_filter();
+                                app.status_message = "\u{2713} Smart quotes applied (Ctrl+S to save, u to revert)".to_string();
+                            }
+                        }
                     }
                     KeyCode::Char('/') => {
                         // Enter search mode
