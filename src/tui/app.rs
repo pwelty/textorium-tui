@@ -665,7 +665,7 @@ fn ui(f: &mut Frame, app: &mut App) {
     }
 }
 
-pub async fn run() -> Result<()> {
+pub fn run() -> Result<()> {
     // Install panic hook to restore terminal on crash
     let original_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |panic_info| {
