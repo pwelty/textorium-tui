@@ -43,6 +43,10 @@ pub struct App {
     filtered_indices: Vec<usize>, // Cached indices into self.posts after filter+sort
     filter_dirty: bool,           // True when filtered_indices needs recomputation
     show_help: bool,              // Whether the help overlay is visible
+    cached_dirty_count: usize,    // Cached count of posts with unsaved changes
+    cached_visual_lines: usize,   // Cached visual line count for current post at current width
+    visual_lines_post_idx: Option<usize>, // Which post index the cached visual lines are for
+    visual_lines_width: u16,      // Width used for cached visual lines computation
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -94,6 +98,10 @@ impl App {
             filtered_indices: Vec::new(),
             filter_dirty: true,
             show_help: false,
+            cached_dirty_count: 0,
+            cached_visual_lines: 0,
+            visual_lines_post_idx: None,
+            visual_lines_width: 0,
         })
     }
 
@@ -102,13 +110,16 @@ impl App {
         self.table_state.select(Some(index));
         self.content_scroll = 0;
         self.metadata_selected = 0;
+        self.invalidate_visual_lines();
     }
 
-    fn dirty_count(&self) -> usize {
-        self.posts
+    fn dirty_count(&mut self) -> usize {
+        self.cached_dirty_count = self
+            .posts
             .iter()
             .filter(|p| p.frontmatter != p.original_frontmatter)
-            .count()
+            .count();
+        self.cached_dirty_count
     }
 
     fn is_dirty(&self, post: &Post) -> bool {
@@ -117,6 +128,44 @@ impl App {
 
     fn invalidate_filter(&mut self) {
         self.filter_dirty = true;
+    }
+
+    /// Get the visual (wrapped) line count for the currently selected post.
+    /// Cached — only recomputes when the post or width changes.
+    fn visual_line_count(&mut self) -> usize {
+        let post_idx = self.filtered_indices.get(self.selected).copied();
+        let width = self.content_area_width;
+
+        if self.visual_lines_post_idx == post_idx && self.visual_lines_width == width {
+            return self.cached_visual_lines;
+        }
+
+        let lines = if let Some(idx) = post_idx {
+            let content = &self.posts[idx].content;
+            let w = width as usize;
+            if w == 0 {
+                content.lines().count()
+            } else {
+                content
+                    .lines()
+                    .map(|line| {
+                        let len = line.len();
+                        if len == 0 { 1 } else { (len + w - 1) / w }
+                    })
+                    .sum()
+            }
+        } else {
+            0
+        };
+
+        self.cached_visual_lines = lines;
+        self.visual_lines_post_idx = post_idx;
+        self.visual_lines_width = width;
+        lines
+    }
+
+    fn invalidate_visual_lines(&mut self) {
+        self.visual_lines_post_idx = None;
     }
 
     fn ensure_filtered(&mut self) {
@@ -167,8 +216,8 @@ impl App {
     }
 
     fn select_next(&mut self) {
-        let filtered = self.get_filtered_posts();
-        if !filtered.is_empty() && self.selected < filtered.len() - 1 {
+        let len = self.filtered_indices.len();
+        if len > 0 && self.selected < len - 1 {
             self.set_selected(self.selected + 1);
         }
     }
@@ -180,11 +229,11 @@ impl App {
     }
 
     fn page_down(&mut self, page_size: usize) {
-        let filtered = self.get_filtered_posts();
-        if filtered.is_empty() {
+        let len = self.filtered_indices.len();
+        if len == 0 {
             return;
         }
-        let max = filtered.len() - 1;
+        let max = len - 1;
         let new = (self.selected + page_size).min(max);
         self.set_selected(new);
     }
@@ -601,7 +650,7 @@ fn ui(f: &mut Frame, app: &mut App) {
     } else if app.search_mode {
         format!(
             "Search mode - Type to filter | Enter/Esc: exit search | {} matches",
-            app.get_filtered_posts().len()
+            app.filtered_indices.len()
         )
     } else if app.focused_pane == 1 {
         format!("q: quit | j/k: navigate | Enter: edit/add | d: delete | u: revert | Ctrl+S: save | Tab: panes | ?: help{}", dirty_suffix)
@@ -922,9 +971,8 @@ pub fn run() -> Result<()> {
                             0 => app.select_next(), // Posts pane
                             1 => {
                                 // Metadata pane - navigate fields (including "Add field")
-                                let filtered = app.get_filtered_posts();
-                                if let Some(post) = filtered.get(app.selected) {
-                                    let max_index = post.frontmatter.len(); // +1 for "Add field", 0-indexed
+                                if let Some(&idx) = app.filtered_indices.get(app.selected) {
+                                    let max_index = app.posts[idx].frontmatter.len(); // +1 for "Add field", 0-indexed
                                     if app.metadata_selected < max_index {
                                         app.metadata_selected += 1;
                                     }
@@ -932,23 +980,10 @@ pub fn run() -> Result<()> {
                             }
                             2 => {
                                 // Content pane - scroll down (visual wrapped lines)
-                                let filtered = app.get_filtered_posts();
-                                if let Some(post) = filtered.get(app.selected) {
-                                    let width = app.content_area_width as usize;
-                                    let visual_lines: usize = if width == 0 {
-                                        post.content.lines().count()
-                                    } else {
-                                        post.content.lines()
-                                            .map(|line| {
-                                                let len = line.len();
-                                                if len == 0 { 1 } else { (len + width - 1) / width }
-                                            })
-                                            .sum()
-                                    };
-                                    let max_scroll = visual_lines.saturating_sub(app.content_area_height as usize);
-                                    if app.content_scroll < max_scroll {
-                                        app.content_scroll += 1;
-                                    }
+                                let visual_lines = app.visual_line_count();
+                                let max_scroll = visual_lines.saturating_sub(app.content_area_height as usize);
+                                if app.content_scroll < max_scroll {
+                                    app.content_scroll += 1;
                                 }
                             }
                             _ => {}
@@ -1031,7 +1066,7 @@ pub fn run() -> Result<()> {
                                 app.posts = result.posts;
                                 app.invalidate_filter();
                                 app.ensure_filtered();
-                                let max = app.get_filtered_posts().len().saturating_sub(1);
+                                let max = app.filtered_indices.len().saturating_sub(1);
                                 if app.selected > max {
                                     app.set_selected(max);
                                 }
@@ -1111,7 +1146,7 @@ pub fn run() -> Result<()> {
                         app.posts = result.posts;
                         app.invalidate_filter();
                         app.ensure_filtered();
-                        let max = app.get_filtered_posts().len().saturating_sub(1);
+                        let max = app.filtered_indices.len().saturating_sub(1);
                         if app.selected > max {
                             app.set_selected(max);
                         }
