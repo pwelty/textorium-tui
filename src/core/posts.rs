@@ -576,6 +576,13 @@ pub fn create_post(config: &Config, options: &CreatePostOptions) -> Result<PathB
     let slug = slugify(&options.title);
     let now = Utc::now();
 
+    // Validate category against path traversal
+    if let Some(ref cat) = options.category {
+        if cat.contains("..") || cat.contains('/') || cat.contains('\\') || cat.starts_with('.') {
+            anyhow::bail!("Invalid category: must not contain path separators or '..'");
+        }
+    }
+
     // Build file path based on SSG type
     let content_path = config.content_path();
     let file_path = match config.ssg {
@@ -602,12 +609,16 @@ pub fn create_post(config: &Config, options: &CreatePostOptions) -> Result<PathB
     );
 
     if let Some(cat) = &options.category {
-        frontmatter.push_str(&format!("categories: [{}]\n", cat));
+        let escaped = cat.replace('"', "\\\"");
+        frontmatter.push_str(&format!("categories: [\"{}\"]\n", escaped));
     }
 
     if let Some(tags) = &options.tags {
-        let tags_str = tags.join(", ");
-        frontmatter.push_str(&format!("tags: [{}]\n", tags_str));
+        let quoted: Vec<String> = tags
+            .iter()
+            .map(|t| format!("\"{}\"", t.replace('"', "\\\"")))
+            .collect();
+        frontmatter.push_str(&format!("tags: [{}]\n", quoted.join(", ")));
     }
 
     frontmatter.push_str("---\n");
@@ -884,8 +895,8 @@ mod tests {
         let content = fs::read_to_string(&path).unwrap();
         assert!(content.contains("title: \"My Test Post\""));
         assert!(content.contains("draft: true"));
-        assert!(content.contains("categories: [dev]"));
-        assert!(content.contains("tags: [rust, tui]"));
+        assert!(content.contains("categories: [\"dev\"]"));
+        assert!(content.contains("tags: [\"rust\", \"tui\"]"));
     }
 
     #[test]
@@ -968,6 +979,67 @@ mod tests {
         assert!(!content.contains("tags:"));
         assert!(content.starts_with("---\n"));
         assert!(content.contains("---\n"));
+    }
+
+    #[test]
+    fn test_create_post_rejects_path_traversal_category() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = Config {
+            site_path: dir.path().to_string_lossy().to_string(),
+            content_dir: "content".to_string(),
+            ssg: SsgType::Hugo,
+            ..Default::default()
+        };
+
+        let options = CreatePostOptions {
+            title: "Evil Post".to_string(),
+            category: Some("../../../tmp".to_string()),
+            tags: None,
+        };
+
+        let result = create_post(&config, &options);
+        assert!(result.is_err(), "Should reject path traversal in category");
+        assert!(
+            result.unwrap_err().to_string().contains("Invalid category"),
+            "Error should mention invalid category"
+        );
+    }
+
+    #[test]
+    fn test_create_post_escapes_yaml_special_chars() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = Config {
+            site_path: dir.path().to_string_lossy().to_string(),
+            content_dir: "content".to_string(),
+            ssg: SsgType::Hugo,
+            ..Default::default()
+        };
+
+        let options = CreatePostOptions {
+            title: "Test Post".to_string(),
+            category: Some("my\"category".to_string()),
+            tags: Some(vec![
+                "tag with \"quotes\"".to_string(),
+                "normal-tag".to_string(),
+            ]),
+        };
+
+        let path = create_post(&config, &options).unwrap();
+        let content = fs::read_to_string(&path).unwrap();
+
+        // Verify the YAML is parseable
+        let post = read_post(&path).unwrap();
+        assert!(
+            post.categories.iter().any(|c| c.contains("my")),
+            "Category should be preserved"
+        );
+        assert_eq!(post.tags.len(), 2, "Both tags should be present");
+
+        // Verify quotes are escaped in the raw content
+        assert!(
+            content.contains("\\\""),
+            "Special chars should be escaped in frontmatter"
+        );
     }
 
     #[test]
