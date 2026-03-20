@@ -275,12 +275,19 @@ pub fn scan_posts(config: &Config) -> Result<ScanResult> {
     let mut posts = Vec::new();
     let mut errors = Vec::new();
 
-    for entry in WalkDir::new(&content_path)
+    for entry_result in WalkDir::new(&content_path)
         .follow_links(true)
         .max_depth(20)
         .into_iter()
-        .filter_map(|e| e.ok())
     {
+        let entry = match entry_result {
+            Ok(e) => e,
+            Err(e) => {
+                let path = e.path().unwrap_or(std::path::Path::new("<unknown>")).to_path_buf();
+                errors.push((path, format!("IO error: {}", e)));
+                continue;
+            }
+        };
         let path = entry.path();
 
         // Skip non-markdown files
@@ -1151,6 +1158,50 @@ mod tests {
             !result.posts.is_empty(),
             "Should find at least the test post"
         );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn test_scan_reports_unreadable_files() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let content_dir = dir.path().join("content");
+        fs::create_dir_all(&content_dir).unwrap();
+
+        // Create a valid post
+        fs::write(
+            content_dir.join("good.md"),
+            "---\ntitle: Good\n---\n\nBody.\n",
+        )
+        .unwrap();
+
+        // Create an unreadable subdirectory
+        let bad_dir = content_dir.join("noaccess");
+        fs::create_dir_all(&bad_dir).unwrap();
+        fs::write(bad_dir.join("hidden.md"), "---\ntitle: Hidden\n---\n").unwrap();
+        fs::set_permissions(&bad_dir, fs::Permissions::from_mode(0o000)).unwrap();
+
+        let config = Config {
+            site_path: dir.path().to_string_lossy().to_string(),
+            content_dir: "content".to_string(),
+            ssg: SsgType::Hugo,
+            ..Default::default()
+        };
+
+        let result = scan_posts(&config).unwrap();
+        assert_eq!(result.posts.len(), 1, "Should find only the good post");
+        assert!(
+            !result.errors.is_empty(),
+            "Should report IO errors for unreadable directory"
+        );
+        assert!(
+            result.errors.iter().any(|(_, msg)| msg.contains("IO error")),
+            "Error should be tagged as IO error"
+        );
+
+        // Restore permissions so tempdir cleanup works
+        fs::set_permissions(&bad_dir, fs::Permissions::from_mode(0o755)).unwrap();
     }
 
     #[test]
