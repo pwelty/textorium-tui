@@ -171,3 +171,171 @@ pub fn configure_site(path: &str) -> Result<()> {
     config.save()?;
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    // --- detect_ssg ---
+
+    #[test]
+    fn test_detect_ssg_hugo_toml() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("hugo.toml"), "").unwrap();
+        assert_eq!(detect_ssg(&dir.path().to_string_lossy()), SsgType::Hugo);
+    }
+
+    #[test]
+    fn test_detect_ssg_hugo_config_toml() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("config.toml"), "").unwrap();
+        assert_eq!(detect_ssg(&dir.path().to_string_lossy()), SsgType::Hugo);
+    }
+
+    #[test]
+    fn test_detect_ssg_jekyll() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("_config.yml"), "").unwrap();
+        assert_eq!(detect_ssg(&dir.path().to_string_lossy()), SsgType::Jekyll);
+    }
+
+    #[test]
+    fn test_detect_ssg_eleventy() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join(".eleventy.js"), "").unwrap();
+        assert_eq!(
+            detect_ssg(&dir.path().to_string_lossy()),
+            SsgType::Eleventy
+        );
+    }
+
+    #[test]
+    fn test_detect_ssg_hugo_wins_priority() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("hugo.toml"), "").unwrap();
+        fs::write(dir.path().join("_config.yml"), "").unwrap();
+        assert_eq!(detect_ssg(&dir.path().to_string_lossy()), SsgType::Hugo);
+    }
+
+    #[test]
+    fn test_detect_ssg_empty_defaults_hugo() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(detect_ssg(&dir.path().to_string_lossy()), SsgType::Hugo);
+    }
+
+    // --- detect_content_dir ---
+
+    #[test]
+    fn test_detect_content_dir_hugo() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(
+            detect_content_dir(&dir.path().to_string_lossy(), &SsgType::Hugo),
+            "content"
+        );
+    }
+
+    #[test]
+    fn test_detect_content_dir_jekyll() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(
+            detect_content_dir(&dir.path().to_string_lossy(), &SsgType::Jekyll),
+            "_posts"
+        );
+    }
+
+    #[test]
+    fn test_detect_content_dir_eleventy_with_posts() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir(dir.path().join("posts")).unwrap();
+        assert_eq!(
+            detect_content_dir(&dir.path().to_string_lossy(), &SsgType::Eleventy),
+            "posts"
+        );
+    }
+
+    #[test]
+    fn test_detect_content_dir_eleventy_with_src() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir(dir.path().join("src")).unwrap();
+        assert_eq!(
+            detect_content_dir(&dir.path().to_string_lossy(), &SsgType::Eleventy),
+            "src"
+        );
+    }
+
+    #[test]
+    fn test_detect_content_dir_eleventy_default() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(
+            detect_content_dir(&dir.path().to_string_lossy(), &SsgType::Eleventy),
+            "posts"
+        );
+    }
+
+    // --- preview_url ---
+
+    #[test]
+    fn test_preview_url_hugo() {
+        let config = Config {
+            site_path: "/site".to_string(),
+            content_dir: "content".to_string(),
+            ssg: SsgType::Hugo,
+            ..Default::default()
+        };
+        let url = config
+            .preview_url(Path::new("/site/content/posts/my-post.md"))
+            .unwrap();
+        assert_eq!(url, "http://localhost:1313/posts/my-post/");
+    }
+
+    #[test]
+    fn test_preview_url_nested_path() {
+        let config = Config {
+            site_path: "/site".to_string(),
+            content_dir: "content".to_string(),
+            ssg: SsgType::Hugo,
+            ..Default::default()
+        };
+        let url = config
+            .preview_url(Path::new("/site/content/blog/2026/post.md"))
+            .unwrap();
+        assert_eq!(url, "http://localhost:1313/blog/2026/post/");
+    }
+
+    #[test]
+    fn test_preview_url_outside_content_returns_none() {
+        let config = Config {
+            site_path: "/site".to_string(),
+            content_dir: "content".to_string(),
+            ssg: SsgType::Hugo,
+            ..Default::default()
+        };
+        assert!(config.preview_url(Path::new("/other/path.md")).is_none());
+    }
+
+    // --- content_path ---
+
+    #[test]
+    fn test_content_path() {
+        let config = Config {
+            site_path: "/home/user/blog".to_string(),
+            content_dir: "content".to_string(),
+            ssg: SsgType::Hugo,
+            ..Default::default()
+        };
+        assert_eq!(
+            config.content_path(),
+            PathBuf::from("/home/user/blog/content")
+        );
+    }
+
+    // --- dev_server_url ---
+
+    #[test]
+    fn test_dev_server_urls() {
+        assert_eq!(SsgType::Hugo.dev_server_url(), "http://localhost:1313");
+        assert_eq!(SsgType::Jekyll.dev_server_url(), "http://localhost:4000");
+        assert_eq!(SsgType::Eleventy.dev_server_url(), "http://localhost:8080");
+    }
+}
