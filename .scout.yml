@@ -1,0 +1,32 @@
+# Scout configuration — what to scan and how
+# Read by /scout skill to avoid re-discovering project context each run
+
+project_type: rust-cli
+
+test_command: cargo test
+
+entry_points:
+  - src/main.rs
+  - src/cli.rs
+  - src/tui/app.rs
+  - src/core/
+
+scans:
+  - error-handling
+  - security
+  - dead-code
+  - test-coverage
+  - feature-gaps
+  - dependency-health
+  - stale-risks
+
+# Scans NOT relevant for this project:
+# - ux-gaps (TUI, not a web app)
+# - performance (already benchmarked — startup ~15ms, navigation zero-lag)
+# - static-site scans (not a static site itself, manages them)
+# - content/messaging (no public URL — textorium.app is separate)
+
+sentry:
+  projects: []  # no Sentry integration
+
+public_url: null
