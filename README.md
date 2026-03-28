@@ -4,6 +4,8 @@ Fast terminal interface for static site generators. Browse posts as a database, 
 
 Built with Rust for instant startup (~15ms) and zero-lag navigation, even with 600+ posts.
 
+![Textorium demo](demo.gif)
+
 ## Install
 
 ```bash
