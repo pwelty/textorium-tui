@@ -1247,3 +1247,229 @@ pub fn run() -> Result<()> {
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::Utc;
+    use std::collections::HashMap;
+    use std::path::PathBuf;
+
+    fn make_post(title: &str, date: &str, draft: bool, categories: &[&str], tags: &[&str], content: &str) -> Post {
+        let dt = chrono::DateTime::parse_from_rfc3339(date)
+            .map(|d| d.with_timezone(&Utc))
+            .ok();
+        let fm: HashMap<String, serde_json::Value> = HashMap::new();
+        Post {
+            path: PathBuf::from(format!("/tmp/test/{}.md", title.replace(' ', "-").to_lowercase())),
+            title: title.to_string(),
+            date: dt,
+            draft,
+            content_type: String::new(),
+            categories: categories.iter().map(|s| s.to_string()).collect(),
+            tags: tags.iter().map(|s| s.to_string()).collect(),
+            content: content.to_string(),
+            frontmatter: fm.clone(),
+            raw_frontmatter: String::new(),
+            original_frontmatter: fm,
+            format: crate::core::posts::FrontmatterFormat::default(),
+        }
+    }
+
+    fn make_app(posts: Vec<Post>) -> App {
+        let mut table_state = TableState::default();
+        table_state.select(Some(0));
+        App {
+            config: Config::default(),
+            posts,
+            selected: 0,
+            table_state,
+            focused_pane: 0,
+            metadata_selected: 0,
+            content_scroll: 0,
+            content_area_width: 80,
+            content_area_height: 24,
+            search_query: String::new(),
+            search_mode: false,
+            sort_mode: SortMode::DateDesc,
+            drafts_only: false,
+            edit_mode: false,
+            edit_buffer: String::new(),
+            status_message: String::new(),
+            adding_field: false,
+            new_field_key: String::new(),
+            quit_pending: false,
+            filtered_indices: Vec::new(),
+            filter_dirty: true,
+            show_help: false,
+            cached_dirty_count: 0,
+            cached_visual_lines: 0,
+            visual_lines_post_idx: None,
+            visual_lines_width: 0,
+        }
+    }
+
+    fn sample_posts() -> Vec<Post> {
+        vec![
+            make_post("Alpha post", "2026-03-01T10:00:00Z", false, &["blog"], &["rust"], "Alpha content"),
+            make_post("Beta draft", "2026-03-15T10:00:00Z", true, &["docs"], &["tui"], "Beta draft content"),
+            make_post("Gamma post", "2026-02-01T10:00:00Z", false, &["blog", "tech"], &["rust", "cli"], "Gamma content about CLI tools"),
+        ]
+    }
+
+    #[test]
+    fn test_drafts_only_filter() {
+        let mut app = make_app(sample_posts());
+        app.drafts_only = true;
+        app.invalidate_filter();
+        app.ensure_filtered();
+
+        let filtered = app.get_filtered_posts();
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].title, "Beta draft");
+    }
+
+    #[test]
+    fn test_search_matches_title_content_categories_tags() {
+        let mut app = make_app(sample_posts());
+
+        // Search by title
+        app.search_query = "alpha".to_string();
+        app.invalidate_filter();
+        app.ensure_filtered();
+        assert_eq!(app.get_filtered_posts().len(), 1);
+
+        // Search by content
+        app.search_query = "CLI tools".to_string();
+        app.invalidate_filter();
+        app.ensure_filtered();
+        assert_eq!(app.get_filtered_posts().len(), 1);
+        assert_eq!(app.get_filtered_posts()[0].title, "Gamma post");
+
+        // Search by category
+        app.search_query = "docs".to_string();
+        app.invalidate_filter();
+        app.ensure_filtered();
+        assert_eq!(app.get_filtered_posts().len(), 1);
+        assert_eq!(app.get_filtered_posts()[0].title, "Beta draft");
+
+        // Search by tag
+        app.search_query = "tui".to_string();
+        app.invalidate_filter();
+        app.ensure_filtered();
+        assert_eq!(app.get_filtered_posts().len(), 1);
+        assert_eq!(app.get_filtered_posts()[0].title, "Beta draft");
+    }
+
+    #[test]
+    fn test_sort_modes() {
+        let mut app = make_app(sample_posts());
+
+        // DateDesc (default) — newest first
+        app.sort_mode = SortMode::DateDesc;
+        app.invalidate_filter();
+        app.ensure_filtered();
+        let posts = app.get_filtered_posts();
+        assert_eq!(posts[0].title, "Beta draft");  // Mar 15
+        assert_eq!(posts[1].title, "Alpha post");  // Mar 1
+        assert_eq!(posts[2].title, "Gamma post");  // Feb 1
+
+        // DateAsc — oldest first
+        app.sort_mode = SortMode::DateAsc;
+        app.invalidate_filter();
+        app.ensure_filtered();
+        let posts = app.get_filtered_posts();
+        assert_eq!(posts[0].title, "Gamma post");
+        assert_eq!(posts[2].title, "Beta draft");
+
+        // TitleAsc — alphabetical
+        app.sort_mode = SortMode::TitleAsc;
+        app.invalidate_filter();
+        app.ensure_filtered();
+        let posts = app.get_filtered_posts();
+        assert_eq!(posts[0].title, "Alpha post");
+        assert_eq!(posts[1].title, "Beta draft");
+        assert_eq!(posts[2].title, "Gamma post");
+
+        // TitleDesc — reverse alphabetical
+        app.sort_mode = SortMode::TitleDesc;
+        app.invalidate_filter();
+        app.ensure_filtered();
+        let posts = app.get_filtered_posts();
+        assert_eq!(posts[0].title, "Gamma post");
+        assert_eq!(posts[2].title, "Alpha post");
+    }
+
+    #[test]
+    fn test_dirty_count() {
+        let mut app = make_app(sample_posts());
+        assert_eq!(app.dirty_count(), 0);
+
+        // Modify one post's frontmatter
+        app.posts[0]
+            .frontmatter
+            .insert("draft".to_string(), serde_json::Value::Bool(true));
+        assert_eq!(app.dirty_count(), 1);
+
+        // Modify another
+        app.posts[2]
+            .frontmatter
+            .insert("title".to_string(), serde_json::Value::String("Changed".to_string()));
+        assert_eq!(app.dirty_count(), 2);
+    }
+
+    #[test]
+    fn test_select_next_prev_bounds() {
+        let mut app = make_app(sample_posts());
+        app.ensure_filtered();
+
+        assert_eq!(app.selected, 0);
+
+        // select_prev at 0 stays at 0
+        app.select_prev();
+        assert_eq!(app.selected, 0);
+
+        // select_next advances
+        app.select_next();
+        assert_eq!(app.selected, 1);
+        app.select_next();
+        assert_eq!(app.selected, 2);
+
+        // select_next at end stays at end
+        app.select_next();
+        assert_eq!(app.selected, 2);
+
+        // select_prev goes back
+        app.select_prev();
+        assert_eq!(app.selected, 1);
+    }
+
+    #[test]
+    fn test_draft_toggle_invalidates_filter() {
+        let mut app = make_app(sample_posts());
+        app.ensure_filtered();
+        assert_eq!(app.get_filtered_posts().len(), 3);
+
+        app.drafts_only = true;
+        app.invalidate_filter();
+        app.ensure_filtered();
+        assert_eq!(app.get_filtered_posts().len(), 1);
+
+        app.drafts_only = false;
+        app.invalidate_filter();
+        app.ensure_filtered();
+        assert_eq!(app.get_filtered_posts().len(), 3);
+    }
+
+    #[test]
+    fn test_visual_line_count() {
+        let long_content = "a".repeat(200); // 200 chars in 80-wide pane = 3 visual lines
+        let posts = vec![make_post("Long post", "2026-03-01T10:00:00Z", false, &[], &[], &long_content)];
+        let mut app = make_app(posts);
+        app.content_area_width = 80;
+        app.ensure_filtered();
+
+        let lines = app.visual_line_count();
+        assert_eq!(lines, 3); // ceil(200/80) = 3
+    }
+}
