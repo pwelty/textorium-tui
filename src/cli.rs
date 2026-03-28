@@ -339,3 +339,196 @@ pub fn run(cli: Cli) -> Result<()> {
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use tempfile::TempDir;
+
+    /// Set up a temp Hugo site with HOME override so Config::load() finds it.
+    /// Returns (home_dir, site_dir) — both must be kept alive for the test duration.
+    fn setup_hugo_site() -> (TempDir, TempDir) {
+        let home = TempDir::new().unwrap();
+        let site = TempDir::new().unwrap();
+
+        // Create Hugo content dir so SSG detection works
+        fs::create_dir_all(site.path().join("content/posts")).unwrap();
+
+        // Override HOME so Config::config_path() uses our temp dir
+        unsafe { std::env::set_var("HOME", home.path()) };
+
+        // Configure the site
+        crate::core::config::configure_site(site.path().to_str().unwrap()).unwrap();
+
+        (home, site)
+    }
+
+    /// Create a sample draft post in the site for list/publish tests
+    fn create_sample_post(site: &TempDir, slug: &str, draft: bool) {
+        let draft_str = if draft { "true" } else { "false" };
+        let content = format!(
+            "---\ntitle: \"Test {slug}\"\ndate: 2026-01-15T10:00:00Z\ndraft: {draft_str}\ncategories: [\"blog\"]\n---\nSample content for {slug}.\n"
+        );
+        let path = site.path().join("content/posts").join(format!("{slug}.md"));
+        fs::write(path, content).unwrap();
+    }
+
+    #[test]
+    fn test_new_creates_post_with_frontmatter() {
+        let (_home, site) = setup_hugo_site();
+        let cli = Cli {
+            command: Some(Commands::New {
+                title: "My test post".to_string(),
+                category: Some("blog".to_string()),
+                tags: Some("rust,tui".to_string()),
+                no_edit: true,
+            }),
+        };
+        run(cli).unwrap();
+
+        let post_path = site.path().join("content/blog/my-test-post.md");
+        assert!(post_path.exists(), "Post file should be created");
+
+        let content = fs::read_to_string(&post_path).unwrap();
+        assert!(content.contains("title: \"My test post\""));
+        assert!(content.contains("draft: true"));
+        assert!(content.contains("categories: [\"blog\"]"));
+        assert!(content.contains("\"rust\""));
+        assert!(content.contains("\"tui\""));
+    }
+
+    #[test]
+    fn test_new_fails_without_site_configured() {
+        let home = TempDir::new().unwrap();
+        unsafe { std::env::set_var("HOME", home.path()) };
+
+        let cli = Cli {
+            command: Some(Commands::New {
+                title: "Orphan post".to_string(),
+                category: None,
+                tags: None,
+                no_edit: true,
+            }),
+        };
+        let result = run(cli);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("No site configured"));
+    }
+
+    #[test]
+    fn test_new_defaults_to_posts_section() {
+        let (_home, site) = setup_hugo_site();
+        let cli = Cli {
+            command: Some(Commands::New {
+                title: "No category".to_string(),
+                category: None,
+                tags: None,
+                no_edit: true,
+            }),
+        };
+        run(cli).unwrap();
+
+        let post_path = site.path().join("content/posts/no-category.md");
+        assert!(post_path.exists(), "Post should be in posts/ when no category given");
+    }
+
+    #[test]
+    fn test_list_finds_posts() {
+        let (_home, site) = setup_hugo_site();
+        create_sample_post(&site, "hello-world", false);
+        create_sample_post(&site, "draft-post", true);
+
+        // Test via scan_posts directly (list prints to stdout)
+        let config = crate::core::config::Config::load().unwrap();
+        let result = crate::core::posts::scan_posts(&config).unwrap();
+        assert_eq!(result.posts.len(), 2);
+    }
+
+    #[test]
+    fn test_list_drafts_filter() {
+        let (_home, site) = setup_hugo_site();
+        create_sample_post(&site, "published-post", false);
+        create_sample_post(&site, "draft-one", true);
+        create_sample_post(&site, "draft-two", true);
+
+        let config = crate::core::config::Config::load().unwrap();
+        let result = crate::core::posts::scan_posts(&config).unwrap();
+        let drafts: Vec<_> = result.posts.iter().filter(|p| p.draft).collect();
+        assert_eq!(drafts.len(), 2);
+
+        let published: Vec<_> = result.posts.iter().filter(|p| !p.draft).collect();
+        assert_eq!(published.len(), 1);
+    }
+
+    #[test]
+    fn test_publish_sets_draft_false() {
+        let (_home, site) = setup_hugo_site();
+        create_sample_post(&site, "to-publish", true);
+
+        let config = crate::core::config::Config::load().unwrap();
+        let result = crate::core::posts::scan_posts(&config).unwrap();
+        let mut post = result
+            .posts
+            .into_iter()
+            .find(|p| p.path.to_string_lossy().contains("to-publish"))
+            .unwrap();
+
+        assert!(post.draft, "Post should start as draft");
+
+        // Simulate publish
+        post.frontmatter
+            .insert("draft".to_string(), serde_json::Value::Bool(false));
+        post.draft = false;
+        crate::core::posts::save_post(&post).unwrap();
+
+        // Re-read and verify
+        let saved = fs::read_to_string(&post.path).unwrap();
+        assert!(saved.contains("draft: false"), "Post should be published: {}", saved);
+    }
+
+    #[test]
+    fn test_publish_nonexistent_slug() {
+        let (_home, _site) = setup_hugo_site();
+        create_sample_post(&_site, "real-post", true);
+
+        let config = crate::core::config::Config::load().unwrap();
+        let result = crate::core::posts::scan_posts(&config).unwrap();
+        let matched = result.posts.into_iter().find(|p| {
+            p.path
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("")
+                == "nonexistent"
+        });
+        assert!(matched.is_none(), "Should not find nonexistent slug");
+    }
+
+    #[test]
+    fn test_list_json_format() {
+        let (_home, site) = setup_hugo_site();
+        create_sample_post(&site, "json-test", false);
+
+        let config = crate::core::config::Config::load().unwrap();
+        let result = crate::core::posts::scan_posts(&config).unwrap();
+
+        // Verify posts can be serialized to JSON (same as list --json)
+        let json_posts: Vec<serde_json::Value> = result
+            .posts
+            .iter()
+            .map(|p| {
+                serde_json::json!({
+                    "title": p.title,
+                    "date": p.date.map(|d| d.to_rfc3339()),
+                    "draft": p.draft,
+                    "categories": p.categories,
+                    "tags": p.tags,
+                    "path": p.path.to_string_lossy(),
+                })
+            })
+            .collect();
+        let json_str = serde_json::to_string_pretty(&json_posts).unwrap();
+        assert!(json_str.contains("json-test"));
+        assert!(json_str.contains("\"draft\": false"));
+    }
+}
