@@ -35,6 +35,9 @@ Three-pane layout: posts table (left), metadata editor (top-right), content prev
 - Sortable columns (title, date, type, status)
 - Real-time search across title, content, categories, and tags
 - Inline metadata editing — add, edit, and delete frontmatter fields
+- Smart quotes conversion — curly quotes, em dashes, ellipses
+- Per-post revert for unsaved changes
+- YAML and TOML frontmatter support
 - Unsaved changes indicator and quit confirmation
 - External editor integration (`$EDITOR`)
 - Browser preview (auto-detects dev server URL)
@@ -58,11 +61,14 @@ Three-pane layout: posts table (left), metadata editor (top-right), content prev
 | `Enter` | Edit field / open editor / add field |
 | `d` | Delete metadata field |
 | `Ctrl+S` | Save to disk |
+| `u` | Revert current post |
 | `s` | Cycle sort mode |
 | `f` | Toggle drafts filter |
 | `/` | Search |
 | `o` | Open in browser |
+| `Q` | Smart quotes (curly quotes, em dashes, ellipses) |
 | `r` | Refresh posts |
+| `?` | Help overlay |
 | `q` / `Ctrl+C` | Quit (confirms if unsaved changes) |
 
 ## CLI commands
@@ -84,16 +90,16 @@ textorium serve --port 3000 --no-drafts
 
 # Build for production
 textorium build
-textorium build --minify  # Hugo only
+textorium build --minify
 ```
 
 ## Supported SSGs
 
-| SSG | Detection | Content directory | Default dev port |
-|-----|-----------|-------------------|-----------------|
-| Hugo | `content/` directory | `content/` | 1313 |
-| Jekyll | `_posts/` directory | `_posts/` + `_drafts/` | 4000 |
-| Eleventy | `.eleventy.js` config | Full directory scan | 8080 |
+| SSG | Detection | Content directory | Frontmatter | Default dev port |
+|-----|-----------|-------------------|-------------|-----------------|
+| Hugo | `content/` directory | `content/` | YAML, TOML | 1313 |
+| Jekyll | `_posts/` directory | `_posts/` + `_drafts/` | YAML | 4000 |
+| Eleventy | `.eleventy.js` config | Full directory scan | YAML | 8080 |
 
 ## Performance
 
