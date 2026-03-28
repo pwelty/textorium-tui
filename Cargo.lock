@@ -881,7 +881,7 @@ dependencies = [
 
 [[package]]
 name = "textorium"
-version = "1.0.1"
+version = "1.0.2"
 dependencies = [
  "anyhow",
  "chrono",
