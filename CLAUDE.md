@@ -12,18 +12,18 @@ Textorium TUI is a fast terminal interface for static site generators (Hugo, Jek
 
 ```
 src/
-├── main.rs              # Entry point (13 lines)
-├── cli.rs               # CLI argument parsing via clap (134 lines)
+├── main.rs              # Entry point (11 lines)
+├── cli.rs               # CLI argument parsing + subcommand execution (341 lines)
 ├── core/
-│   ├── config.rs        # Site config management, SSG detection (196 lines)
-│   └── posts.rs         # Markdown parsing, frontmatter extraction, file scanning (224 lines)
+│   ├── mod.rs           # Module declarations (2 lines)
+│   ├── config.rs        # Site config management, SSG detection (341 lines)
+│   └── posts.rs         # Markdown parsing, frontmatter extraction, file scanning (1338 lines)
 ├── tui/
-│   └── app.rs           # Main TUI application, all UI logic (745 lines)
-└── widgets/
-    └── mod.rs           # Custom widget stubs (1 line)
+│   ├── mod.rs           # Module declarations (1 line)
+│   └── app.rs           # Main TUI application, all UI logic (1249 lines)
 ```
 
-**Total:** ~1,165 lines of Rust
+**Total:** ~3,283 lines of Rust (including ~1,400 lines of tests)
 
 ### Key components
 
@@ -33,7 +33,7 @@ src/
 
 **`tui/app.rs`** — The main TUI. Three panes: posts table (left), metadata editor (top-right), content preview (bottom-right). Handles all keyboard input, pane focus, sorting, filtering, search, inline editing, and file saving. This is the largest file and where most feature work happens.
 
-**`cli.rs`** — Clap-based CLI with subcommands: `use`, `new`, `list`, `publish`, `idea`, `serve`, `build`. Currently only `use` is implemented; others are stubbed.
+**`cli.rs`** — Clap-based CLI with subcommands: `use`, `new`, `list`, `publish`, `idea`, `serve`, `build`. All subcommands are fully implemented.
 
 ### Data flow
 
@@ -50,7 +50,7 @@ src/
 ### Rust patterns
 
 - **Error handling:** `anyhow::Result` for application errors, `thiserror` for typed errors
-- **Async:** tokio runtime exists but not heavily used yet (mainly for future file watching)
+- **Async:** No async runtime — the app is fully synchronous
 - **Serialization:** serde + serde_yaml for frontmatter, toml for config
 - **TUI:** ratatui 0.29 + crossterm 0.28 for terminal rendering and input
 
@@ -103,27 +103,28 @@ Docs: Brief description in sentence case
 Refactor: Brief description in sentence case
 ```
 
-## What's implemented vs stubbed
+## Features
 
-**Working:**
-- TUI with three panes, navigation, sorting, filtering
+**TUI (default, no subcommand):**
+- Three panes: posts table (left), metadata editor (top-right), content preview (bottom-right)
 - Real-time search (title, content, categories)
 - Inline metadata editing (add, edit, delete fields)
+- Smart quotes conversion (`Q` key — curly quotes, em dashes, ellipses)
 - External editor integration ($EDITOR)
-- Save to disk (Ctrl+S)
-- Browser preview (press `o`)
+- Per-post revert (`u` key)
+- Save all unsaved posts (Ctrl+S)
+- Browser preview (`o` key)
 - SSG detection and config management
-- `textorium use <path>` command
+- TOML and YAML frontmatter support
 
-**Stubbed (CLI commands in cli.rs):**
+**CLI subcommands (all implemented):**
+- `textorium use <path>` — set active site directory
 - `textorium new "Title"` — create new post
 - `textorium list` — list posts
 - `textorium publish` — publish draft
 - `textorium idea` — capture to Notion
 - `textorium serve` — start dev server
 - `textorium build` — build site
-
-These have clap definitions but the match arms just print "not yet implemented."
 
 ## Related projects
 
