@@ -627,7 +627,7 @@ fn ui(f: &mut Frame, app: &mut App) {
 
     let content = Paragraph::new(content_text)
         .block(content_block)
-        .wrap(Wrap { trim: false })
+        .wrap(Wrap { trim: true })
         .scroll((app.content_scroll as u16, 0));
     f.render_widget(content, right_chunks[1]);
 
