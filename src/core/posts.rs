@@ -35,6 +35,8 @@ pub struct Post {
     pub raw_frontmatter: String,
     /// Snapshot of frontmatter at load time, used to detect changes on save
     pub original_frontmatter: HashMap<String, serde_json::Value>,
+    /// Snapshot of content at load time, used to detect content-only changes
+    pub original_content: String,
     /// Whether the frontmatter uses YAML (---) or TOML (+++) delimiters
     #[serde(skip)]
     pub format: FrontmatterFormat,
@@ -245,8 +247,9 @@ pub fn read_post(path: &Path) -> Result<Post> {
         content_type: String::new(),
         categories: Vec::new(),
         tags: Vec::new(),
-        content: body,
+        content: body.clone(),
         original_frontmatter: frontmatter.clone(),
+        original_content: body,
         frontmatter,
         raw_frontmatter: raw_frontmatter_text,
         format,

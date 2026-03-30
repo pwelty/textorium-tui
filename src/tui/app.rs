@@ -117,13 +117,13 @@ impl App {
         self.cached_dirty_count = self
             .posts
             .iter()
-            .filter(|p| p.frontmatter != p.original_frontmatter)
+            .filter(|p| Self::is_dirty(p))
             .count();
         self.cached_dirty_count
     }
 
-    fn is_dirty(&self, post: &Post) -> bool {
-        post.frontmatter != post.original_frontmatter
+    fn is_dirty(post: &Post) -> bool {
+        post.frontmatter != post.original_frontmatter || post.content != post.original_content
     }
 
     fn invalidate_filter(&mut self) {
@@ -380,7 +380,7 @@ fn ui(f: &mut Frame, app: &mut App) {
                     &post.content_type
                 };
 
-                let title_display = if app.is_dirty(post) {
+                let title_display = if App::is_dirty(post) {
                     format!("{} *", post.title)
                 } else {
                     post.title.clone()
@@ -892,7 +892,7 @@ pub fn run() -> Result<()> {
                         let dirty_paths: Vec<std::path::PathBuf> = app
                             .posts
                             .iter()
-                            .filter(|p| p.frontmatter != p.original_frontmatter)
+                            .filter(|p| App::is_dirty(p))
                             .map(|p| p.path.clone())
                             .collect();
 
@@ -911,6 +911,8 @@ pub fn run() -> Result<()> {
                                             if let Ok(reloaded) = read_post(&post.path) {
                                                 post.original_frontmatter =
                                                     reloaded.original_frontmatter;
+                                                post.original_content =
+                                                    reloaded.original_content;
                                                 post.raw_frontmatter =
                                                     reloaded.raw_frontmatter;
                                             }
@@ -1164,12 +1166,13 @@ pub fn run() -> Result<()> {
                         let filtered = app.get_filtered_posts();
                         if let Some(post_ref) = filtered.get(app.selected) {
                             let post_path = post_ref.path.clone();
-                            let is_dirty = post_ref.frontmatter != post_ref.original_frontmatter;
+                            let is_dirty = App::is_dirty(post_ref);
 
                             if !is_dirty {
                                 app.status_message = "No unsaved changes".to_string();
                             } else if let Some(post) = app.posts.iter_mut().find(|p| p.path == post_path) {
                                 post.frontmatter = post.original_frontmatter.clone();
+                                post.content = post.original_content.clone();
                                 post.sync_fields_from_frontmatter();
 
                                 let title = post.title.clone();
@@ -1271,6 +1274,7 @@ mod tests {
             frontmatter: fm.clone(),
             raw_frontmatter: String::new(),
             original_frontmatter: fm,
+            original_content: content.to_string(),
             format: crate::core::posts::FrontmatterFormat::default(),
         }
     }
