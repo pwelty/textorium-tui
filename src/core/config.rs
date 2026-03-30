@@ -58,11 +58,21 @@ impl Config {
     /// Load config from disk
     pub fn load() -> Result<Self> {
         let path = Self::config_path()?;
+        Self::load_from_file(&path)
+    }
+
+    /// Load config from a specific config directory
+    pub fn load_from(config_dir: &Path) -> Result<Self> {
+        let path = config_dir.join("config.json");
+        Self::load_from_file(&path)
+    }
+
+    fn load_from_file(path: &Path) -> Result<Self> {
         if !path.exists() {
             return Ok(Self::default());
         }
 
-        let content = fs::read_to_string(&path).context("Failed to read config file")?;
+        let content = fs::read_to_string(path).context("Failed to read config file")?;
         let config: Config =
             serde_json::from_str(&content).context("Failed to parse config file")?;
         Ok(config)
@@ -71,8 +81,19 @@ impl Config {
     /// Save config to disk
     pub fn save(&self) -> Result<()> {
         let path = Self::config_path()?;
+        self.save_to_file(&path)
+    }
+
+    /// Save config to a specific config directory
+    pub fn save_to(&self, config_dir: &Path) -> Result<()> {
+        fs::create_dir_all(config_dir)?;
+        let path = config_dir.join("config.json");
+        self.save_to_file(&path)
+    }
+
+    fn save_to_file(&self, path: &Path) -> Result<()> {
         let content = serde_json::to_string_pretty(self)?;
-        fs::write(&path, content).context("Failed to write config file")?;
+        fs::write(path, content).context("Failed to write config file")?;
         Ok(())
     }
 
@@ -148,6 +169,19 @@ fn detect_content_dir(path: &str, ssg: &SsgType) -> String {
 
 /// Configure textorium to use a site
 pub fn configure_site(path: &str) -> Result<()> {
+    let config = build_site_config(path)?;
+    config.save()?;
+    Ok(())
+}
+
+/// Configure textorium to use a site, saving config to a specific directory
+pub fn configure_site_to(path: &str, config_dir: &Path) -> Result<()> {
+    let config = build_site_config(path)?;
+    config.save_to(config_dir)?;
+    Ok(())
+}
+
+fn build_site_config(path: &str) -> Result<Config> {
     let path = fs::canonicalize(path).context("Could not resolve site path")?;
     let path_str = path.to_string_lossy().to_string();
 
@@ -160,16 +194,13 @@ pub fn configure_site(path: &str) -> Result<()> {
         .unwrap_or("site")
         .to_string();
 
-    let config = Config {
+    Ok(Config {
         site_name,
         site_path: path_str,
         content_dir,
         ssg,
         editor: std::env::var("EDITOR").ok(),
-    };
-
-    config.save()?;
-    Ok(())
+    })
 }
 
 #[cfg(test)]
