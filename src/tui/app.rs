@@ -1059,27 +1059,27 @@ pub fn run() -> Result<()> {
                             }
                         } else if app.focused_pane == 2 {
                             // Open in external editor if in content pane
+                            // Capture path before opening editor so we can reload just this post
+                            let edited_path = {
+                                let filtered = app.get_filtered_posts();
+                                filtered.get(app.selected).map(|p| p.path.clone())
+                            };
                             if let Err(e) = app.open_in_editor() {
                                 app.status_message = format!("✗ Error opening editor: {}", e);
-                            } else {
-                                // Reload posts after editing
-                                let result = scan_posts(&app.config)?;
-                                let err_count = result.errors.len();
-                                app.posts = result.posts;
-                                app.invalidate_filter();
-                                app.ensure_filtered();
-                                let max = app.filtered_indices.len().saturating_sub(1);
-                                if app.selected > max {
-                                    app.set_selected(max);
+                            } else if let Some(path) = edited_path {
+                                // Reload only the edited post, preserving unsaved changes on others
+                                match read_post(&path) {
+                                    Ok(reloaded) => {
+                                        if let Some(post) = app.posts.iter_mut().find(|p| p.path == path) {
+                                            *post = reloaded;
+                                        }
+                                        app.invalidate_filter();
+                                        app.status_message = "✓ Reloaded after edit".to_string();
+                                    }
+                                    Err(e) => {
+                                        app.status_message = format!("✗ Error reloading post: {}", e);
+                                    }
                                 }
-                                app.status_message = if err_count > 0 {
-                                    format!(
-                                        "✓ Reloaded after edit ({} files skipped)",
-                                        err_count
-                                    )
-                                } else {
-                                    "✓ Reloaded after edit".to_string()
-                                };
                             }
                             // Redraw after returning from editor
                             terminal.clear()?;
