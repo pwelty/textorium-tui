@@ -438,6 +438,32 @@ fn find_toml_key_lines(lines: &[&str], key: &str) -> Option<(usize, usize)> {
     Some((start, end))
 }
 
+/// Write content to a file atomically: write to a temp file in the same directory,
+/// fsync, then rename over the target. Prevents data loss on crash/power loss.
+fn atomic_write(path: &Path, content: &str) -> Result<()> {
+    use std::io::Write;
+
+    let tmp_path = path.with_extension("md.tmp");
+    let result = (|| -> Result<()> {
+        let mut f = fs::File::create(&tmp_path)
+            .with_context(|| format!("Failed to create temp file: {}", tmp_path.display()))?;
+        f.write_all(content.as_bytes())
+            .with_context(|| format!("Failed to write temp file: {}", tmp_path.display()))?;
+        f.sync_all()
+            .with_context(|| format!("Failed to sync temp file: {}", tmp_path.display()))?;
+        fs::rename(&tmp_path, path)
+            .with_context(|| format!("Failed to rename {} to {}", tmp_path.display(), path.display()))?;
+        Ok(())
+    })();
+
+    // Clean up temp file on error
+    if result.is_err() {
+        let _ = fs::remove_file(&tmp_path);
+    }
+
+    result
+}
+
 /// Save a post back to disk, preserving original frontmatter formatting where possible
 pub fn save_post(post: &Post) -> Result<()> {
     let (open_delim, close_delim) = match post.format {
@@ -448,8 +474,7 @@ pub fn save_post(post: &Post) -> Result<()> {
     // If frontmatter is unchanged, write back the original file exactly
     if post.frontmatter == post.original_frontmatter {
         let full_content = format!("{}{}{}\n\n{}\n", open_delim, post.raw_frontmatter, close_delim, post.content);
-        fs::write(&post.path, full_content)
-            .with_context(|| format!("Failed to write post: {}", post.path.display()))?;
+        atomic_write(&post.path, &full_content)?;
         return Ok(());
     }
 
@@ -558,8 +583,7 @@ pub fn save_post(post: &Post) -> Result<()> {
     let frontmatter_text = result_lines.join("\n");
     let full_content = format!("{}\n{}\n{}\n\n{}\n", open_delim, frontmatter_text, close_delim, post.content);
 
-    fs::write(&post.path, full_content)
-        .with_context(|| format!("Failed to write post: {}", post.path.display()))?;
+    atomic_write(&post.path, &full_content)?;
 
     Ok(())
 }
