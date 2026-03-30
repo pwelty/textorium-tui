@@ -1190,8 +1190,7 @@ pub fn run() -> Result<()> {
                                     }
                                     Err(e) => {
                                         app.status_message =
-                                            format!("✗ Could not open browser — URL: {}", url);
-                                        let _ = e; // Log suppressed; URL shown for manual copy
+                                            format!("✗ Could not open browser ({}). URL: {}", e, url);
                                     }
                                 }
                             } else {
