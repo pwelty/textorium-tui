@@ -327,6 +327,129 @@ impl App {
         }
         Ok(())
     }
+
+    fn save_all(&mut self) {
+        let dirty_paths: Vec<std::path::PathBuf> = self
+            .posts
+            .iter()
+            .filter(|p| Self::is_dirty(p))
+            .map(|p| p.path.clone())
+            .collect();
+
+        if dirty_paths.is_empty() {
+            self.status_message = "No unsaved changes".to_string();
+        } else {
+            let mut saved = 0usize;
+            let mut errors = 0usize;
+            let mut first_error: Option<String> = None;
+            for path in &dirty_paths {
+                if let Some(post) = self.posts.iter_mut().find(|p| &p.path == path) {
+                    match save_post(post) {
+                        Ok(_) => {
+                            if let Ok(reloaded) = read_post(&post.path) {
+                                post.original_frontmatter = reloaded.original_frontmatter;
+                                post.original_content = reloaded.original_content;
+                                post.raw_frontmatter = reloaded.raw_frontmatter;
+                            }
+                            saved += 1;
+                        }
+                        Err(e) => {
+                            if first_error.is_none() {
+                                first_error = Some(format!("{}", e));
+                            }
+                            errors += 1;
+                        }
+                    }
+                }
+            }
+            self.status_message = if errors > 0 {
+                let err_detail = first_error.as_deref().unwrap_or("unknown error");
+                if saved > 0 {
+                    match errors {
+                        1 => format!("✓ Saved {}, ✗ 1 error: {}", saved, err_detail),
+                        n => format!("✓ Saved {}, ✗ {} errors (first: {})", saved, n, err_detail),
+                    }
+                } else {
+                    match errors {
+                        1 => format!("✗ 1 error: {}", err_detail),
+                        n => format!("✗ {} errors (first: {})", n, err_detail),
+                    }
+                }
+            } else if saved == 1 {
+                format!("✓ Saved: {}", dirty_paths[0].display())
+            } else {
+                format!("✓ Saved {} posts", saved)
+            };
+        }
+    }
+
+    fn delete_metadata_field(&mut self) {
+        if self.focused_pane != 1 {
+            return;
+        }
+
+        let post_path = {
+            let filtered = self.get_filtered_posts();
+            filtered.get(self.selected).map(|p| p.path.clone())
+        };
+
+        if let Some(path) = post_path {
+            if let Some(actual_post) = self.posts.iter_mut().find(|p| p.path == path) {
+                let mut keys: Vec<String> = actual_post.frontmatter.keys().cloned().collect();
+                keys.sort();
+
+                if self.metadata_selected < keys.len() {
+                    if let Some(key) = keys.get(self.metadata_selected) {
+                        if key != "title" {
+                            actual_post.frontmatter.remove(key);
+                            self.status_message = format!("✓ Deleted field: {}", key);
+                            if self.metadata_selected > 0
+                                && self.metadata_selected >= actual_post.frontmatter.len()
+                            {
+                                self.metadata_selected -= 1;
+                            }
+                        } else {
+                            self.status_message = "✗ Cannot delete title field".to_string();
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    fn revert_selected(&mut self) {
+        let filtered = self.get_filtered_posts();
+        if let Some(post_ref) = filtered.get(self.selected) {
+            let post_path = post_ref.path.clone();
+            let is_dirty = Self::is_dirty(post_ref);
+
+            if !is_dirty {
+                self.status_message = "No unsaved changes".to_string();
+            } else if let Some(post) = self.posts.iter_mut().find(|p| p.path == post_path) {
+                post.frontmatter = post.original_frontmatter.clone();
+                post.content = post.original_content.clone();
+                post.sync_fields_from_frontmatter();
+
+                let title = post.title.clone();
+                self.invalidate_filter();
+                self.status_message = format!("Reverted: {}", title);
+            }
+        }
+    }
+
+    fn apply_smartquotes(&mut self) {
+        if self.focused_pane != 2 {
+            return;
+        }
+
+        if let Some(idx) = self.filtered_indices.get(self.selected).copied() {
+            let post = &mut self.posts[idx];
+            post.content = smartquotes(&post.content);
+            self.invalidate_filter();
+            self.status_message =
+                "\u{2713} Smart quotes applied (Ctrl+S to save, u to revert)".to_string();
+        }
+    }
 }
 
 fn ui(f: &mut Frame, app: &mut App) {
@@ -888,64 +1011,7 @@ pub fn run() -> Result<()> {
                         continue;
                     }
                     KeyCode::Char('s') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                        // Save all dirty posts to disk
-                        let dirty_paths: Vec<std::path::PathBuf> = app
-                            .posts
-                            .iter()
-                            .filter(|p| App::is_dirty(p))
-                            .map(|p| p.path.clone())
-                            .collect();
-
-                        if dirty_paths.is_empty() {
-                            app.status_message = "No unsaved changes".to_string();
-                        } else {
-                            let mut saved = 0usize;
-                            let mut errors = 0usize;
-                            let mut first_error: Option<String> = None;
-                            for path in &dirty_paths {
-                                if let Some(post) =
-                                    app.posts.iter_mut().find(|p| &p.path == path)
-                                {
-                                    match save_post(post) {
-                                        Ok(_) => {
-                                            if let Ok(reloaded) = read_post(&post.path) {
-                                                post.original_frontmatter =
-                                                    reloaded.original_frontmatter;
-                                                post.original_content =
-                                                    reloaded.original_content;
-                                                post.raw_frontmatter =
-                                                    reloaded.raw_frontmatter;
-                                            }
-                                            saved += 1;
-                                        }
-                                        Err(e) => {
-                                            if first_error.is_none() {
-                                                first_error = Some(format!("{}", e));
-                                            }
-                                            errors += 1;
-                                        }
-                                    }
-                                }
-                            }
-                            app.status_message = if errors > 0 {
-                                let err_detail = first_error.as_deref().unwrap_or("unknown error");
-                                if saved > 0 {
-                                    match errors {
-                                        1 => format!("✓ Saved {}, ✗ 1 error: {}", saved, err_detail),
-                                        n => format!("✓ Saved {}, ✗ {} errors (first: {})", saved, n, err_detail),
-                                    }
-                                } else {
-                                    match errors {
-                                        1 => format!("✗ 1 error: {}", err_detail),
-                                        n => format!("✗ {} errors (first: {})", n, err_detail),
-                                    }
-                                }
-                            } else if saved == 1 {
-                                format!("✓ Saved: {}", dirty_paths[0].display())
-                            } else {
-                                format!("✓ Saved {} posts", saved)
-                            };
-                        }
+                        app.save_all();
                     }
                     KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                         if app.dirty_count() == 0 || app.quit_pending {
@@ -1100,45 +1166,7 @@ pub fn run() -> Result<()> {
                         app.content_scroll = 0;
                     }
                     KeyCode::Char('d') => {
-                        // Delete metadata field when in metadata pane
-                        if app.focused_pane == 1 {
-                            let post_path = {
-                                let filtered = app.get_filtered_posts();
-                                filtered.get(app.selected).map(|p| p.path.clone())
-                            };
-
-                            if let Some(path) = post_path {
-                                if let Some(actual_post) =
-                                    app.posts.iter_mut().find(|p| p.path == path)
-                                {
-                                    let mut keys: Vec<String> =
-                                        actual_post.frontmatter.keys().cloned().collect();
-                                    keys.sort();
-
-                                    // Don't allow deleting if on "Add field" row
-                                    if app.metadata_selected < keys.len() {
-                                        if let Some(key) = keys.get(app.metadata_selected) {
-                                            // Don't allow deleting critical fields
-                                            if key != "title" {
-                                                actual_post.frontmatter.remove(key);
-                                                app.status_message =
-                                                    format!("✓ Deleted field: {}", key);
-                                                // Move selection up if we were at the last field
-                                                if app.metadata_selected > 0
-                                                    && app.metadata_selected
-                                                        >= actual_post.frontmatter.len()
-                                                {
-                                                    app.metadata_selected -= 1;
-                                                }
-                                            } else {
-                                                app.status_message =
-                                                    "✗ Cannot delete title field".to_string();
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
+                        app.delete_metadata_field();
                     }
                     KeyCode::Char('s') => app.cycle_sort(),
                     KeyCode::Char('f') => app.toggle_drafts(),
@@ -1162,24 +1190,7 @@ pub fn run() -> Result<()> {
                         };
                     }
                     KeyCode::Char('u') => {
-                        // Revert selected post to last-saved state
-                        let filtered = app.get_filtered_posts();
-                        if let Some(post_ref) = filtered.get(app.selected) {
-                            let post_path = post_ref.path.clone();
-                            let is_dirty = App::is_dirty(post_ref);
-
-                            if !is_dirty {
-                                app.status_message = "No unsaved changes".to_string();
-                            } else if let Some(post) = app.posts.iter_mut().find(|p| p.path == post_path) {
-                                post.frontmatter = post.original_frontmatter.clone();
-                                post.content = post.original_content.clone();
-                                post.sync_fields_from_frontmatter();
-
-                                let title = post.title.clone();
-                                app.invalidate_filter();
-                                app.status_message = format!("Reverted: {}", title);
-                            }
-                        }
+                        app.revert_selected();
                     }
                     KeyCode::Char('o') => {
                         // Open current post in browser
@@ -1206,14 +1217,7 @@ pub fn run() -> Result<()> {
                         app.show_help = true;
                     }
                     KeyCode::Char('Q') => {
-                        if app.focused_pane == 2 {
-                            if let Some(idx) = app.filtered_indices.get(app.selected).copied() {
-                                let post = &mut app.posts[idx];
-                                post.content = smartquotes(&post.content);
-                                app.invalidate_filter();
-                                app.status_message = "\u{2713} Smart quotes applied (Ctrl+S to save, u to revert)".to_string();
-                            }
-                        }
+                        app.apply_smartquotes();
                     }
                     KeyCode::Char('/') => {
                         // Enter search mode
@@ -1255,7 +1259,9 @@ mod tests {
     use super::*;
     use chrono::Utc;
     use std::collections::HashMap;
+    use std::io::Write;
     use std::path::PathBuf;
+    use tempfile::NamedTempFile;
 
     fn make_post(title: &str, date: &str, draft: bool, categories: &[&str], tags: &[&str], content: &str) -> Post {
         let dt = chrono::DateTime::parse_from_rfc3339(date)
@@ -1474,5 +1480,182 @@ mod tests {
 
         let lines = app.visual_line_count();
         assert_eq!(lines, 3); // ceil(200/80) = 3
+    }
+
+    fn create_temp_markdown(content: &str) -> NamedTempFile {
+        let mut f = NamedTempFile::new().unwrap();
+        f.write_all(content.as_bytes()).unwrap();
+        f.flush().unwrap();
+        f
+    }
+
+    fn make_post_from_file(f: &NamedTempFile) -> Post {
+        crate::core::posts::read_post(f.path()).unwrap()
+    }
+
+    // --- save_all tests ---
+
+    #[test]
+    fn test_save_all_no_dirty_posts() {
+        let mut app = make_app(sample_posts());
+        app.ensure_filtered();
+        app.save_all();
+        assert_eq!(app.status_message, "No unsaved changes");
+    }
+
+    #[test]
+    fn test_save_all_writes_to_disk() {
+        let md = "---\ntitle: Test post\ndraft: false\n---\n\nOriginal content.\n";
+        let f = create_temp_markdown(md);
+        let mut post = make_post_from_file(&f);
+
+        // Modify content — makes it dirty
+        post.content = "Updated content.".to_string();
+
+        let mut app = make_app(vec![post]);
+        app.ensure_filtered();
+        app.save_all();
+
+        let saved = std::fs::read_to_string(f.path()).unwrap();
+        assert!(saved.contains("Updated content."), "save_all should write content to disk");
+        assert!(app.status_message.contains("✓ Saved"), "status should confirm save");
+    }
+
+    #[test]
+    fn test_save_all_syncs_originals_after_save() {
+        let md = "---\ntitle: Sync test\ndraft: false\n---\n\nBefore.\n";
+        let f = create_temp_markdown(md);
+        let mut post = make_post_from_file(&f);
+
+        post.content = "After.".to_string();
+        assert!(App::is_dirty(&post));
+
+        let mut app = make_app(vec![post]);
+        app.ensure_filtered();
+        app.save_all();
+
+        // Post should no longer be dirty — originals were synced from disk
+        assert!(!App::is_dirty(&app.posts[0]), "post should be clean after save_all syncs originals");
+    }
+
+    // --- delete_metadata_field tests ---
+
+    #[test]
+    fn test_delete_metadata_field_removes_key() {
+        let mut post = make_post("Delete test", "2026-03-01T10:00:00Z", false, &[], &[], "content");
+        post.frontmatter.insert("author".to_string(), serde_json::Value::String("Paul".to_string()));
+        post.frontmatter.insert("title".to_string(), serde_json::Value::String("Delete test".to_string()));
+
+        let mut app = make_app(vec![post]);
+        app.focused_pane = 1;
+        app.ensure_filtered();
+
+        // Keys sort alphabetically: "author" is index 0, "title" is index 1
+        app.metadata_selected = 0; // "author"
+        app.delete_metadata_field();
+
+        assert!(!app.posts[0].frontmatter.contains_key("author"), "author field should be deleted");
+        assert!(app.status_message.contains("✓ Deleted field: author"));
+    }
+
+    #[test]
+    fn test_delete_metadata_field_blocks_title() {
+        let mut post = make_post("Title test", "2026-03-01T10:00:00Z", false, &[], &[], "content");
+        post.frontmatter.insert("title".to_string(), serde_json::Value::String("Title test".to_string()));
+
+        let mut app = make_app(vec![post]);
+        app.focused_pane = 1;
+        app.ensure_filtered();
+
+        // With only "title" in frontmatter, it's at index 0
+        app.metadata_selected = 0;
+        app.delete_metadata_field();
+
+        assert!(app.posts[0].frontmatter.contains_key("title"), "title should not be deletable");
+        assert_eq!(app.status_message, "✗ Cannot delete title field");
+    }
+
+    #[test]
+    fn test_delete_metadata_field_wrong_pane() {
+        let mut post = make_post("Pane test", "2026-03-01T10:00:00Z", false, &[], &[], "content");
+        post.frontmatter.insert("author".to_string(), serde_json::Value::String("Paul".to_string()));
+
+        let mut app = make_app(vec![post]);
+        app.focused_pane = 0; // posts pane, not metadata
+        app.ensure_filtered();
+        app.metadata_selected = 0;
+        app.delete_metadata_field();
+
+        assert!(app.posts[0].frontmatter.contains_key("author"), "field should not be deleted when focused_pane != 1");
+        assert_eq!(app.status_message, "", "no status message when wrong pane");
+    }
+
+    // --- revert_selected tests ---
+
+    #[test]
+    fn test_revert_selected_restores_content() {
+        let mut post = make_post("Revert test", "2026-03-01T10:00:00Z", false, &[], &[], "Original content");
+        let original_content = post.content.clone();
+        post.content = "Modified content".to_string();
+
+        let mut app = make_app(vec![post]);
+        app.ensure_filtered();
+        app.revert_selected();
+
+        assert_eq!(app.posts[0].content, original_content, "content should be reverted");
+        assert!(!App::is_dirty(&app.posts[0]), "post should be clean after revert");
+        assert!(app.status_message.starts_with("Reverted:"));
+    }
+
+    #[test]
+    fn test_revert_selected_clean_post() {
+        let mut app = make_app(sample_posts());
+        app.ensure_filtered();
+        app.revert_selected(); // nothing dirty
+        assert_eq!(app.status_message, "No unsaved changes");
+    }
+
+    // --- apply_smartquotes tests ---
+
+    #[test]
+    fn test_apply_smartquotes_transforms_content() {
+        let posts = vec![make_post("Quote test", "2026-03-01T10:00:00Z", false, &[], &[], "He said \"hello world\".")];
+        let mut app = make_app(posts);
+        app.focused_pane = 2;
+        app.ensure_filtered();
+        app.apply_smartquotes();
+
+        assert!(
+            app.posts[0].content.contains('\u{201C}') || app.posts[0].content.contains('\u{201D}'),
+            "straight quotes should be converted to curly quotes"
+        );
+        assert!(app.status_message.contains("Smart quotes applied"));
+    }
+
+    #[test]
+    fn test_apply_smartquotes_wrong_pane() {
+        let original = "He said \"hello\".".to_string();
+        let posts = vec![make_post("Quote test", "2026-03-01T10:00:00Z", false, &[], &[], &original)];
+        let mut app = make_app(posts);
+        app.focused_pane = 0; // posts pane, not content
+        app.ensure_filtered();
+        app.apply_smartquotes();
+
+        assert_eq!(app.posts[0].content, original, "content should not change when focused_pane != 2");
+        assert_eq!(app.status_message, "", "no status message when wrong pane");
+    }
+
+    // --- pane focus ---
+
+    #[test]
+    fn test_pane_focus_cycles() {
+        let mut app = make_app(sample_posts());
+        assert_eq!(app.focused_pane, 0);
+        app.focused_pane = (app.focused_pane + 1) % 3;
+        assert_eq!(app.focused_pane, 1);
+        app.focused_pane = (app.focused_pane + 1) % 3;
+        assert_eq!(app.focused_pane, 2);
+        app.focused_pane = (app.focused_pane + 1) % 3;
+        assert_eq!(app.focused_pane, 0);
     }
 }
