@@ -16,7 +16,7 @@ use std::io;
 use std::process::Command;
 
 use crate::core::{
-    config::Config,
+    config::{Config, MultiSiteConfig, SiteEntry},
     posts::{read_post, save_post, scan_posts, smartquotes, CreatePostOptions, Post, ScanResult},
     templates,
 };
@@ -54,6 +54,10 @@ pub struct App {
     template_selected: usize,     // Currently highlighted template in picker
     new_post_title_mode: bool,    // True when prompting for new post title
     new_post_title: String,       // Buffer for new post title input
+    // Site picker overlay state
+    show_site_picker: bool,
+    site_entries: Vec<SiteEntry>, // All registered sites for the picker
+    site_picker_selected: usize,  // Currently highlighted site in picker
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -83,6 +87,9 @@ impl App {
         table_state.select(Some(0));
 
         let template_names = templates::list_templates(&config).unwrap_or_default();
+        let site_entries = MultiSiteConfig::load()
+            .map(|m| m.sites)
+            .unwrap_or_default();
 
         Ok(Self {
             config,
@@ -116,6 +123,9 @@ impl App {
             template_selected: 0,
             new_post_title_mode: false,
             new_post_title: String::new(),
+            show_site_picker: false,
+            site_entries,
+            site_picker_selected: 0,
         })
     }
 
@@ -922,6 +932,64 @@ fn ui(f: &mut Frame, app: &mut App) {
         f.render_widget(para, overlay_area);
     }
 
+    // Site picker overlay
+    if app.show_site_picker {
+        let area = f.area();
+        let item_count = app.site_entries.len() as u16;
+        let overlay_height = (item_count + 5).min(area.height.saturating_sub(4));
+        let overlay_width = 60u16.min(area.width.saturating_sub(4));
+        let x = (area.width.saturating_sub(overlay_width)) / 2;
+        let y = (area.height.saturating_sub(overlay_height)) / 2;
+        let overlay_area = ratatui::layout::Rect::new(x, y, overlay_width, overlay_height);
+
+        let mut items: Vec<Line> = Vec::new();
+        items.push(Line::from(""));
+
+        if app.site_entries.is_empty() {
+            items.push(Line::from(Span::styled(
+                "  No sites registered. Use: textorium sites add <path>",
+                Style::default().fg(Color::DarkGray),
+            )));
+        } else {
+            for (i, site) in app.site_entries.iter().enumerate() {
+                let is_active = site.name == app.config.site_name;
+                let is_selected = i == app.site_picker_selected;
+                let marker = if is_selected { "► " } else { "  " };
+                let active_tag = if is_active { " (active)" } else { "" };
+                let color = if is_selected {
+                    Color::Yellow
+                } else if is_active {
+                    Color::Green
+                } else {
+                    Color::Reset
+                };
+                items.push(Line::from(vec![
+                    Span::raw(marker),
+                    Span::styled(format!("{}{}", site.name, active_tag), Style::default().fg(color)),
+                    Span::styled(
+                        format!("  {}", site.path),
+                        Style::default().fg(Color::DarkGray),
+                    ),
+                ]));
+            }
+        }
+
+        items.push(Line::from(""));
+        items.push(Line::from(Span::styled(
+            "  j/k: navigate   Enter: switch   Esc: cancel",
+            Style::default().fg(Color::DarkGray),
+        )));
+
+        let block = Block::default()
+            .title(" Sites — S: switch ")
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::Cyan));
+
+        let para = Paragraph::new(items).block(block);
+        f.render_widget(Clear, overlay_area);
+        f.render_widget(para, overlay_area);
+    }
+
     // Help overlay
     if app.show_help {
         let area = f.area();
@@ -945,6 +1013,7 @@ fn ui(f: &mut Frame, app: &mut App) {
             Line::from("  r             Refresh from disk"),
             Line::from("  o             Open in browser"),
             Line::from("  n             New post (template picker if templates exist)"),
+            Line::from("  S             Site picker (switch active site)"),
             Line::from(""),
             Line::from(Span::styled("Posts pane", Style::default().add_modifier(Modifier::BOLD))),
             Line::from("  j / k         Navigate up/down"),
@@ -1047,6 +1116,64 @@ pub fn run() -> Result<()> {
                         app.new_post_title_mode = false;
                         app.new_post_title.clear();
                         app.status_message = "New post cancelled".to_string();
+                    }
+                    _ => {}
+                }
+                continue;
+            }
+
+            // Site picker overlay
+            if app.show_site_picker {
+                let total = app.site_entries.len();
+                match key.code {
+                    KeyCode::Char('j') | KeyCode::Down => {
+                        if total > 0 && app.site_picker_selected < total - 1 {
+                            app.site_picker_selected += 1;
+                        }
+                    }
+                    KeyCode::Char('k') | KeyCode::Up => {
+                        if app.site_picker_selected > 0 {
+                            app.site_picker_selected -= 1;
+                        }
+                    }
+                    KeyCode::Enter => {
+                        if let Some(site) = app.site_entries.get(app.site_picker_selected) {
+                            let name = site.name.clone();
+                            app.show_site_picker = false;
+                            // Switch site and reload
+                            match crate::core::config::sites_use(&name) {
+                                Ok(()) => {
+                                    match Config::load() {
+                                        Ok(new_config) => {
+                                            app.config = new_config;
+                                            // Reload posts for new site
+                                            match scan_posts(&app.config) {
+                                                Ok(result) => {
+                                                    app.posts = result.posts;
+                                                    app.invalidate_filter();
+                                                    app.set_selected(0);
+                                                    app.template_names = templates::list_templates(&app.config).unwrap_or_default();
+                                                    app.status_message = format!("✓ Switched to site '{}'", name);
+                                                }
+                                                Err(e) => {
+                                                    app.status_message = format!("✗ Reload failed: {}", e);
+                                                }
+                                            }
+                                        }
+                                        Err(e) => {
+                                            app.status_message = format!("✗ Config reload failed: {}", e);
+                                        }
+                                    }
+                                }
+                                Err(e) => {
+                                    app.status_message = format!("✗ Could not switch site: {}", e);
+                                }
+                            }
+                        }
+                    }
+                    KeyCode::Esc => {
+                        app.show_site_picker = false;
+                        app.status_message = "Site switch cancelled".to_string();
                     }
                     _ => {}
                 }
@@ -1419,6 +1546,19 @@ pub fn run() -> Result<()> {
                     KeyCode::Char('?') => {
                         app.show_help = true;
                     }
+                    KeyCode::Char('S') => {
+                        // Open site picker
+                        app.site_entries = MultiSiteConfig::load()
+                            .map(|m| m.sites)
+                            .unwrap_or_default();
+                        // Pre-select the active site
+                        app.site_picker_selected = app
+                            .site_entries
+                            .iter()
+                            .position(|s| s.name == app.config.site_name)
+                            .unwrap_or(0);
+                        app.show_site_picker = true;
+                    }
                     KeyCode::Char('n') => {
                         // Create new post — prompt for template if any exist
                         // Refresh template list first (user may have added one)
@@ -1539,6 +1679,9 @@ mod tests {
             template_selected: 0,
             new_post_title_mode: false,
             new_post_title: String::new(),
+            show_site_picker: false,
+            site_entries: Vec::new(),
+            site_picker_selected: 0,
         }
     }
 

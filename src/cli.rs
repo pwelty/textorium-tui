@@ -46,6 +46,12 @@ pub enum Commands {
         action: TemplatesAction,
     },
 
+    /// Manage multiple sites
+    Sites {
+        #[command(subcommand)]
+        action: SitesAction,
+    },
+
     /// List posts
     List {
         /// Show only drafts
@@ -93,6 +99,30 @@ pub enum TemplatesAction {
     /// Create a new template scaffold
     Create {
         /// Template name (no extension)
+        name: String,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum SitesAction {
+    /// Add a site to the registry
+    Add {
+        /// Path to the site directory
+        path: String,
+        /// Custom name for the site (defaults to directory name)
+        #[arg(long)]
+        name: Option<String>,
+    },
+    /// List all registered sites
+    List,
+    /// Switch to a different active site
+    Use {
+        /// Site name
+        name: String,
+    },
+    /// Remove a site from the registry
+    Remove {
+        /// Site name
         name: String,
     },
 }
@@ -173,6 +203,36 @@ pub fn run(cli: Cli) -> Result<()> {
                     let path = crate::core::templates::create_template(&config, &name)?;
                     println!("✓ Created template: {}", path.display());
                     println!("Edit the file to customize your frontmatter scaffold.");
+                }
+            }
+        }
+        Some(Commands::Sites { action }) => {
+            match action {
+                SitesAction::Add { path, name } => {
+                    let site_name = crate::core::config::sites_add(&path, name.as_deref())?;
+                    println!("✓ Added site '{}'", site_name);
+                    println!("Run: textorium sites use {} — to make it active", site_name);
+                }
+                SitesAction::List => {
+                    let sites = crate::core::config::sites_list()?;
+                    if sites.is_empty() {
+                        println!("No sites registered. Run: textorium sites add <path>");
+                    } else {
+                        println!("{:<20} {:<8} {}", "Name", "Active", "Path");
+                        println!("{}", "-".repeat(60));
+                        for (name, path, active) in &sites {
+                            let marker = if *active { "✓" } else { "" };
+                            println!("{:<20} {:<8} {}", name, marker, path);
+                        }
+                    }
+                }
+                SitesAction::Use { name } => {
+                    crate::core::config::sites_use(&name)?;
+                    println!("✓ Switched to site '{}'", name);
+                }
+                SitesAction::Remove { name } => {
+                    crate::core::config::sites_remove(&name)?;
+                    println!("✓ Removed site '{}'", name);
                 }
             }
         }
