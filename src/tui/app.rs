@@ -1,5 +1,5 @@
-use anyhow::Result;
 use crate::core::filters::{FilterOp, PropertyFilter};
+use anyhow::Result;
 use crossterm::{
     event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyModifiers},
     execute,
@@ -36,51 +36,54 @@ pub struct App {
     search_mode: bool,
     sort_mode: SortMode,
     drafts_only: bool,
-    edit_mode: bool,        // Whether we're editing a metadata field
-    edit_buffer: String,    // Buffer for editing metadata values
-    status_message: String, // Status bar message
-    adding_field: bool,     // Whether we're adding a new field
-    new_field_key: String,  // Key name for new field being added
-    quit_pending: bool,     // True after first 'q' press with unsaved changes
-    filtered_indices: Vec<usize>, // Cached indices into self.posts after filter+sort
-    filter_dirty: bool,           // True when filtered_indices needs recomputation
-    show_help: bool,              // Whether the help overlay is visible
-    cached_dirty_count: usize,    // Cached count of posts with unsaved changes
-    cached_visual_lines: usize,   // Cached visual line count for current post at current width
+    edit_mode: bool,                      // Whether we're editing a metadata field
+    edit_buffer: String,                  // Buffer for editing metadata values
+    status_message: String,               // Status bar message
+    adding_field: bool,                   // Whether we're adding a new field
+    new_field_key: String,                // Key name for new field being added
+    quit_pending: bool,                   // True after first 'q' press with unsaved changes
+    filtered_indices: Vec<usize>,         // Cached indices into self.posts after filter+sort
+    filter_dirty: bool,                   // True when filtered_indices needs recomputation
+    show_help: bool,                      // Whether the help overlay is visible
+    cached_dirty_count: usize,            // Cached count of posts with unsaved changes
+    cached_visual_lines: usize, // Cached visual line count for current post at current width
     visual_lines_post_idx: Option<usize>, // Which post index the cached visual lines are for
-    visual_lines_width: u16,      // Width used for cached visual lines computation
+    visual_lines_width: u16,    // Width used for cached visual lines computation
     // Template picker overlay state
     show_template_picker: bool,
-    template_names: Vec<String>,  // Available template names
-    template_selected: usize,     // Currently highlighted template in picker
-    new_post_title_mode: bool,    // True when prompting for new post title
-    new_post_title: String,       // Buffer for new post title input
+    template_names: Vec<String>, // Available template names
+    template_selected: usize,    // Currently highlighted template in picker
+    new_post_title_mode: bool,   // True when prompting for new post title
+    new_post_title: String,      // Buffer for new post title input
     // Site picker overlay state
     show_site_picker: bool,
     site_entries: Vec<SiteEntry>, // All registered sites for the picker
     site_picker_selected: usize,  // Currently highlighted site in picker
     // Property filter state
-    property_filters: Vec<PropertyFilter>,  // Active AND filters
-    show_filter_builder: bool,              // Whether filter builder overlay is open
+    property_filters: Vec<PropertyFilter>, // Active AND filters
+    show_filter_builder: bool,             // Whether filter builder overlay is open
     filter_builder_step: FilterBuilderStep, // Current step in builder
-    filter_builder_field: String,           // Field name being built
-    filter_builder_op: Option<FilterOp>,    // Operator being built
-    filter_builder_value: String,           // Value input buffer
-    filter_builder_op_idx: usize,           // Currently selected op in list
+    filter_builder_field: String,          // Field name being built
+    filter_builder_op: Option<FilterOp>,   // Operator being built
+    filter_builder_value: String,          // Value input buffer
+    filter_builder_op_idx: usize,          // Currently selected op in list
     // Batch frontmatter state
     selected_posts: std::collections::HashSet<std::path::PathBuf>, // Selected post paths
-    show_batch_menu: bool,           // Whether batch ops menu is open
-    batch_menu_idx: usize,           // Currently highlighted batch op
-    batch_confirm_mode: bool,        // Whether we're in the confirmation prompt
-    batch_confirm_prompt: String,    // The confirmation message
+    show_batch_menu: bool,                                         // Whether batch ops menu is open
+    batch_menu_idx: usize,                                         // Currently highlighted batch op
+    batch_confirm_mode: bool,     // Whether we're in the confirmation prompt
+    batch_confirm_prompt: String, // The confirmation message
     pending_batch_op: Option<BatchOp>, // Batch op waiting for confirmation
     batch_revert_paths: Vec<std::path::PathBuf>, // Paths modified by last batch op (for undo)
-    batch_snapshots: std::collections::HashMap<std::path::PathBuf, (std::collections::HashMap<String, serde_json::Value>, String)>, // pre-batch snapshots: path → (frontmatter, raw)
-    batch_input_mode: bool,          // True when collecting extra input for batch op
-    batch_input_prompt: String,      // Prompt for batch input
-    batch_input_buffer: String,      // Input buffer for batch op arguments
-    batch_input_field: String,       // Field name for batch op (set value / add field / remove)
-    batch_input_step: BatchInputStep,// Step within multi-step batch input
+    batch_snapshots: std::collections::HashMap<
+        std::path::PathBuf,
+        (std::collections::HashMap<String, serde_json::Value>, String),
+    >, // pre-batch snapshots: path → (frontmatter, raw)
+    batch_input_mode: bool,       // True when collecting extra input for batch op
+    batch_input_prompt: String,   // Prompt for batch input
+    batch_input_buffer: String,   // Input buffer for batch op arguments
+    batch_input_field: String,    // Field name for batch op (set value / add field / remove)
+    batch_input_step: BatchInputStep, // Step within multi-step batch input
 }
 
 /// Available batch frontmatter operations
@@ -93,6 +96,7 @@ enum BatchOp {
 }
 
 impl BatchOp {
+    #[allow(dead_code)]
     fn description(&self) -> String {
         match self {
             BatchOp::AddField { key, value } => format!("add field '{}' = '{}'", key, value),
@@ -111,9 +115,9 @@ enum BatchInputStep {
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum FilterBuilderStep {
-    Field,   // Enter the field name
-    Op,      // Pick the operator
-    Value,   // Enter the value (for contains/equals)
+    Field, // Enter the field name
+    Op,    // Pick the operator
+    Value, // Enter the value (for contains/equals)
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -143,9 +147,7 @@ impl App {
         table_state.select(Some(0));
 
         let template_names = templates::list_templates(&config).unwrap_or_default();
-        let site_entries = MultiSiteConfig::load()
-            .map(|m| m.sites)
-            .unwrap_or_default();
+        let site_entries = MultiSiteConfig::load().map(|m| m.sites).unwrap_or_default();
 
         Ok(Self {
             config,
@@ -214,11 +216,7 @@ impl App {
     }
 
     fn dirty_count(&mut self) -> usize {
-        self.cached_dirty_count = self
-            .posts
-            .iter()
-            .filter(|p| Self::is_dirty(p))
-            .count();
+        self.cached_dirty_count = self.posts.iter().filter(|p| Self::is_dirty(p)).count();
         self.cached_dirty_count
     }
 
@@ -250,7 +248,11 @@ impl App {
                     .lines()
                     .map(|line| {
                         let len = line.len();
-                        if len == 0 { 1 } else { (len + w - 1) / w }
+                        if len == 0 {
+                            1
+                        } else {
+                            len.div_ceil(w)
+                        }
                     })
                     .sum()
             }
@@ -283,7 +285,9 @@ impl App {
         // Property filters (AND logic)
         if !self.property_filters.is_empty() {
             indices.retain(|&i| {
-                self.property_filters.iter().all(|f| f.matches(&self.posts[i]))
+                self.property_filters
+                    .iter()
+                    .all(|f| f.matches(&self.posts[i]))
             });
         }
 
@@ -297,18 +301,24 @@ impl App {
                     || p.categories
                         .iter()
                         .any(|c| c.to_lowercase().contains(&query))
-                    || p.tags
-                        .iter()
-                        .any(|t| t.to_lowercase().contains(&query))
+                    || p.tags.iter().any(|t| t.to_lowercase().contains(&query))
             });
         }
 
         // Sort
         match self.sort_mode {
-            SortMode::DateDesc => indices.sort_by(|&a, &b| self.posts[b].date.cmp(&self.posts[a].date)),
-            SortMode::DateAsc => indices.sort_by(|&a, &b| self.posts[a].date.cmp(&self.posts[b].date)),
-            SortMode::TitleAsc => indices.sort_by(|&a, &b| self.posts[a].title.cmp(&self.posts[b].title)),
-            SortMode::TitleDesc => indices.sort_by(|&a, &b| self.posts[b].title.cmp(&self.posts[a].title)),
+            SortMode::DateDesc => {
+                indices.sort_by(|&a, &b| self.posts[b].date.cmp(&self.posts[a].date))
+            }
+            SortMode::DateAsc => {
+                indices.sort_by(|&a, &b| self.posts[a].date.cmp(&self.posts[b].date))
+            }
+            SortMode::TitleAsc => {
+                indices.sort_by(|&a, &b| self.posts[a].title.cmp(&self.posts[b].title))
+            }
+            SortMode::TitleDesc => {
+                indices.sort_by(|&a, &b| self.posts[b].title.cmp(&self.posts[a].title))
+            }
         }
 
         self.filtered_indices = indices;
@@ -378,10 +388,7 @@ impl App {
 
         let site_path = std::path::Path::new(&self.config.site_path);
         if !site_path.exists() {
-            return Some(format!(
-                "Site path not found: {}",
-                self.config.site_path
-            ));
+            return Some(format!("Site path not found: {}", self.config.site_path));
         }
 
         let content_path = self.config.content_path();
@@ -555,7 +562,10 @@ impl App {
         let mut snapshots = std::collections::HashMap::new();
         for path in &selected_paths {
             if let Some(post) = self.posts.iter().find(|p| &p.path == path) {
-                snapshots.insert(path.clone(), (post.frontmatter.clone(), post.raw_frontmatter.clone()));
+                snapshots.insert(
+                    path.clone(),
+                    (post.frontmatter.clone(), post.raw_frontmatter.clone()),
+                );
             }
         }
 
@@ -565,19 +575,15 @@ impl App {
                     BatchOp::AddField { key, value } => {
                         // Only add if not already present
                         if !post.frontmatter.contains_key(key) {
-                            post.frontmatter.insert(
-                                key.clone(),
-                                serde_json::Value::String(value.clone()),
-                            );
+                            post.frontmatter
+                                .insert(key.clone(), serde_json::Value::String(value.clone()));
                             post.sync_fields_from_frontmatter();
                             modified_paths.push(path.clone());
                         }
                     }
                     BatchOp::SetValue { key, value } => {
-                        post.frontmatter.insert(
-                            key.clone(),
-                            serde_json::Value::String(value.clone()),
-                        );
+                        post.frontmatter
+                            .insert(key.clone(), serde_json::Value::String(value.clone()));
                         post.sync_fields_from_frontmatter();
                         modified_paths.push(path.clone());
                     }
@@ -590,10 +596,8 @@ impl App {
                     }
                     BatchOp::ToggleDraft => {
                         let new_draft = !post.draft;
-                        post.frontmatter.insert(
-                            "draft".to_string(),
-                            serde_json::Value::Bool(new_draft),
-                        );
+                        post.frontmatter
+                            .insert("draft".to_string(), serde_json::Value::Bool(new_draft));
                         post.sync_fields_from_frontmatter();
                         modified_paths.push(path.clone());
                     }
@@ -630,15 +634,10 @@ impl App {
 
         if errors > 0 {
             let err = first_error.as_deref().unwrap_or("unknown");
-            self.status_message = format!(
-                "Batch: {} saved, {} errors (first: {})",
-                saved, errors, err
-            );
+            self.status_message =
+                format!("Batch: {} saved, {} errors (first: {})", saved, errors, err);
         } else {
-            self.status_message = format!(
-                "✓ Batch: {} modified (u to revert)",
-                saved
-            );
+            self.status_message = format!("✓ Batch: {} modified (u to revert)", saved);
         }
         self.selected_posts.clear();
     }
@@ -680,9 +679,8 @@ impl App {
 
     /// Create a new post with optional template and reload the posts list.
     fn create_new_post(&mut self, title: &str, template_name: Option<&str>) {
-        let template_fields = template_name.and_then(|name| {
-            templates::load_template(&self.config, name).ok()
-        });
+        let template_fields =
+            template_name.and_then(|name| templates::load_template(&self.config, name).ok());
 
         let options = CreatePostOptions {
             title: title.to_string(),
@@ -827,7 +825,10 @@ fn ui(f: &mut Frame, app: &mut App) {
             String::new()
         };
         let count = format!(" ({}/{})", filtered_count, app.posts.len());
-        let posts_title = format!("Posts{}{}{}{}{}", count, filter, prop_filters, search, focus);
+        let posts_title = format!(
+            "Posts{}{}{}{}{}",
+            count, filter, prop_filters, search, focus
+        );
 
         (rows, posts_title, filtered_count, is_empty, empty_message)
     };
@@ -1060,7 +1061,10 @@ fn ui(f: &mut Frame, app: &mut App) {
     };
 
     let selection_suffix = if !app.selected_posts.is_empty() {
-        format!(" | {} selected (b: batch ops, Ctrl+A: all, Space: toggle)", app.selected_posts.len())
+        format!(
+            " | {} selected (b: batch ops, Ctrl+A: all, Space: toggle)",
+            app.selected_posts.len()
+        )
     } else {
         String::new()
     };
@@ -1079,7 +1083,10 @@ fn ui(f: &mut Frame, app: &mut App) {
     } else {
         {
             let filter_hint = if !app.property_filters.is_empty() {
-                format!(" | F: add filter | x: clear filters ({})", app.property_filters.len())
+                format!(
+                    " | F: add filter | x: clear filters ({})",
+                    app.property_filters.len()
+                )
             } else {
                 " | F: filter".to_string()
             };
@@ -1138,22 +1145,40 @@ fn ui(f: &mut Frame, app: &mut App) {
         let mut items: Vec<Line> = Vec::new();
         items.push(Line::from(""));
 
-        let no_tmpl_marker = if app.template_selected == 0 { "► " } else { "  " };
+        let no_tmpl_marker = if app.template_selected == 0 {
+            "► "
+        } else {
+            "  "
+        };
         items.push(Line::from(vec![
             Span::raw(no_tmpl_marker),
-            Span::styled("No template (minimal frontmatter)", Style::default().fg(
-                if app.template_selected == 0 { Color::Yellow } else { Color::Reset }
-            )),
+            Span::styled(
+                "No template (minimal frontmatter)",
+                Style::default().fg(if app.template_selected == 0 {
+                    Color::Yellow
+                } else {
+                    Color::Reset
+                }),
+            ),
         ]));
 
         for (i, name) in app.template_names.iter().enumerate() {
             let idx = i + 1;
-            let marker = if app.template_selected == idx { "► " } else { "  " };
+            let marker = if app.template_selected == idx {
+                "► "
+            } else {
+                "  "
+            };
             items.push(Line::from(vec![
                 Span::raw(marker),
-                Span::styled(name.clone(), Style::default().fg(
-                    if app.template_selected == idx { Color::Yellow } else { Color::Reset }
-                )),
+                Span::styled(
+                    name.clone(),
+                    Style::default().fg(if app.template_selected == idx {
+                        Color::Yellow
+                    } else {
+                        Color::Reset
+                    }),
+                ),
             ]));
         }
 
@@ -1195,9 +1220,14 @@ fn ui(f: &mut Frame, app: &mut App) {
             let marker = if selected { "► " } else { "  " };
             items.push(Line::from(vec![
                 Span::raw(marker),
-                Span::styled(op.to_string(), Style::default().fg(
-                    if selected { Color::Yellow } else { Color::Reset }
-                )),
+                Span::styled(
+                    op.to_string(),
+                    Style::default().fg(if selected {
+                        Color::Yellow
+                    } else {
+                        Color::Reset
+                    }),
+                ),
             ]));
         }
         items.push(Line::from(""));
@@ -1227,9 +1257,10 @@ fn ui(f: &mut Frame, app: &mut App) {
 
         let items: Vec<Line> = vec![
             Line::from(""),
-            Line::from(vec![
-                Span::styled(format!("  {}", app.batch_input_prompt), Style::default().fg(Color::Cyan)),
-            ]),
+            Line::from(vec![Span::styled(
+                format!("  {}", app.batch_input_prompt),
+                Style::default().fg(Color::Cyan),
+            )]),
             Line::from(""),
             Line::from(vec![
                 Span::raw("  "),
@@ -1332,9 +1363,14 @@ fn ui(f: &mut Frame, app: &mut App) {
                     let marker = if selected { "► " } else { "  " };
                     lines.push(Line::from(vec![
                         Span::raw(marker),
-                        Span::styled(op.to_string(), Style::default().fg(
-                            if selected { Color::Yellow } else { Color::Reset }
-                        )),
+                        Span::styled(
+                            op.to_string(),
+                            Style::default().fg(if selected {
+                                Color::Yellow
+                            } else {
+                                Color::Reset
+                            }),
+                        ),
                     ]));
                 }
                 lines.push(Line::from(""));
@@ -1345,8 +1381,14 @@ fn ui(f: &mut Frame, app: &mut App) {
             }
             FilterBuilderStep::Value => {
                 lines.push(Line::from(Span::styled(
-                    format!("  Field: {}  Op: {}", app.filter_builder_field,
-                        app.filter_builder_op.as_ref().map(|o| o.label()).unwrap_or("")),
+                    format!(
+                        "  Field: {}  Op: {}",
+                        app.filter_builder_field,
+                        app.filter_builder_op
+                            .as_ref()
+                            .map(|o| o.label())
+                            .unwrap_or("")
+                    ),
                     Style::default().fg(Color::Cyan),
                 )));
                 lines.push(Line::from(""));
@@ -1414,7 +1456,10 @@ fn ui(f: &mut Frame, app: &mut App) {
                 };
                 items.push(Line::from(vec![
                     Span::raw(marker),
-                    Span::styled(format!("{}{}", site.name, active_tag), Style::default().fg(color)),
+                    Span::styled(
+                        format!("{}{}", site.name, active_tag),
+                        Style::default().fg(color),
+                    ),
                     Span::styled(
                         format!("  {}", site.path),
                         Style::default().fg(Color::DarkGray),
@@ -1450,7 +1495,10 @@ fn ui(f: &mut Frame, app: &mut App) {
         let overlay_area = ratatui::layout::Rect::new(x, y, overlay_width, overlay_height);
 
         let help_text = vec![
-            Line::from(Span::styled("Global", Style::default().add_modifier(Modifier::BOLD))),
+            Line::from(Span::styled(
+                "Global",
+                Style::default().add_modifier(Modifier::BOLD),
+            )),
             Line::from("  ?             Toggle this help"),
             Line::from("  q             Quit (confirms if unsaved)"),
             Line::from("  Ctrl+S        Save all changes"),
@@ -1466,18 +1514,27 @@ fn ui(f: &mut Frame, app: &mut App) {
             Line::from("  x             Clear all property filters"),
             Line::from("  S             Site picker (switch active site)"),
             Line::from(""),
-            Line::from(Span::styled("Posts pane", Style::default().add_modifier(Modifier::BOLD))),
+            Line::from(Span::styled(
+                "Posts pane",
+                Style::default().add_modifier(Modifier::BOLD),
+            )),
             Line::from("  j / k         Navigate up/down"),
             Line::from("  Ctrl+D        Page down"),
             Line::from("  Ctrl+U        Page up"),
             Line::from(""),
-            Line::from(Span::styled("Metadata pane", Style::default().add_modifier(Modifier::BOLD))),
+            Line::from(Span::styled(
+                "Metadata pane",
+                Style::default().add_modifier(Modifier::BOLD),
+            )),
             Line::from("  j / k         Navigate fields"),
             Line::from("  Enter         Edit field / add new field"),
             Line::from("  d             Delete field"),
             Line::from("  u             Revert post changes"),
             Line::from(""),
-            Line::from(Span::styled("Content pane", Style::default().add_modifier(Modifier::BOLD))),
+            Line::from(Span::styled(
+                "Content pane",
+                Style::default().add_modifier(Modifier::BOLD),
+            )),
             Line::from("  j / k         Scroll up/down"),
             Line::from("  Enter         Open in $EDITOR"),
             Line::from("  Q             Apply smart quotes"),
@@ -1575,7 +1632,12 @@ pub fn run() -> Result<()> {
 
             // Filter builder overlay
             if app.show_filter_builder {
-                let ops = [FilterOp::Contains, FilterOp::Equals, FilterOp::IsTrue, FilterOp::IsFalse];
+                let ops = [
+                    FilterOp::Contains,
+                    FilterOp::Equals,
+                    FilterOp::IsTrue,
+                    FilterOp::IsFalse,
+                ];
                 match app.filter_builder_step {
                     FilterBuilderStep::Field => match key.code {
                         KeyCode::Char(c) => {
@@ -1627,7 +1689,10 @@ pub fn run() -> Result<()> {
                                     app.filter_builder_step = FilterBuilderStep::Field;
                                     app.invalidate_filter();
                                     app.set_selected(0);
-                                    app.status_message = format!("✓ Filter added ({} active)", app.property_filters.len());
+                                    app.status_message = format!(
+                                        "✓ Filter added ({} active)",
+                                        app.property_filters.len()
+                                    );
                                 }
                                 _ => {
                                     app.filter_builder_step = FilterBuilderStep::Value;
@@ -1666,7 +1731,10 @@ pub fn run() -> Result<()> {
                                     app.filter_builder_step = FilterBuilderStep::Field;
                                     app.invalidate_filter();
                                     app.set_selected(0);
-                                    app.status_message = format!("✓ Filter added ({} active)", app.property_filters.len());
+                                    app.status_message = format!(
+                                        "✓ Filter added ({} active)",
+                                        app.property_filters.len()
+                                    );
                                 }
                             }
                         }
@@ -1713,16 +1781,21 @@ pub fn run() -> Result<()> {
                                                     app.posts = result.posts;
                                                     app.invalidate_filter();
                                                     app.set_selected(0);
-                                                    app.template_names = templates::list_templates(&app.config).unwrap_or_default();
-                                                    app.status_message = format!("✓ Switched to site '{}'", name);
+                                                    app.template_names =
+                                                        templates::list_templates(&app.config)
+                                                            .unwrap_or_default();
+                                                    app.status_message =
+                                                        format!("✓ Switched to site '{}'", name);
                                                 }
                                                 Err(e) => {
-                                                    app.status_message = format!("✗ Reload failed: {}", e);
+                                                    app.status_message =
+                                                        format!("✗ Reload failed: {}", e);
                                                 }
                                             }
                                         }
                                         Err(e) => {
-                                            app.status_message = format!("✗ Config reload failed: {}", e);
+                                            app.status_message =
+                                                format!("✗ Config reload failed: {}", e);
                                         }
                                     }
                                 }
@@ -1804,13 +1877,15 @@ pub fn run() -> Result<()> {
                         match app.batch_input_step {
                             BatchInputStep::Key => {
                                 if !app.batch_input_buffer.is_empty() {
-                                    app.batch_input_field = std::mem::take(&mut app.batch_input_buffer);
+                                    app.batch_input_field =
+                                        std::mem::take(&mut app.batch_input_buffer);
                                     // Determine if we need a value step
                                     match app.batch_menu_idx {
                                         0 | 1 => {
                                             // AddField or SetValue — need value step
                                             app.batch_input_step = BatchInputStep::Value;
-                                            app.batch_input_prompt = format!("Value for '{}':", app.batch_input_field);
+                                            app.batch_input_prompt =
+                                                format!("Value for '{}':", app.batch_input_field);
                                         }
                                         2 => {
                                             // RemoveField — field name is enough
@@ -1822,7 +1897,8 @@ pub fn run() -> Result<()> {
                                                 "Remove field '{}' from {} post(s)?",
                                                 key, n
                                             );
-                                            app.pending_batch_op = Some(BatchOp::RemoveField { key });
+                                            app.pending_batch_op =
+                                                Some(BatchOp::RemoveField { key });
                                         }
                                         _ => {}
                                     }
@@ -1841,14 +1917,16 @@ pub fn run() -> Result<()> {
                                                 "Add field '{}' = '{}' to {} post(s)?",
                                                 key, value, n
                                             );
-                                            app.pending_batch_op = Some(BatchOp::AddField { key, value });
+                                            app.pending_batch_op =
+                                                Some(BatchOp::AddField { key, value });
                                         }
                                         _ => {
                                             app.batch_confirm_prompt = format!(
                                                 "Set '{}' to '{}' on {} post(s)?",
                                                 key, value, n
                                             );
-                                            app.pending_batch_op = Some(BatchOp::SetValue { key, value });
+                                            app.pending_batch_op =
+                                                Some(BatchOp::SetValue { key, value });
                                         }
                                     }
                                 }
@@ -1888,7 +1966,8 @@ pub fn run() -> Result<()> {
                                 // ToggleDraft — no input needed, go straight to confirm
                                 let n = app.selected_posts.len();
                                 app.batch_confirm_mode = true;
-                                app.batch_confirm_prompt = format!("Toggle draft on {} post(s)?", n);
+                                app.batch_confirm_prompt =
+                                    format!("Toggle draft on {} post(s)?", n);
                                 app.pending_batch_op = Some(BatchOp::ToggleDraft);
                             }
                             _ => {
@@ -2082,7 +2161,8 @@ pub fn run() -> Result<()> {
                             2 => {
                                 // Content pane - scroll down (visual wrapped lines)
                                 let visual_lines = app.visual_line_count();
-                                let max_scroll = visual_lines.saturating_sub(app.content_area_height as usize);
+                                let max_scroll =
+                                    visual_lines.saturating_sub(app.content_area_height as usize);
                                 if app.content_scroll < max_scroll {
                                     app.content_scroll += 1;
                                 }
@@ -2169,14 +2249,17 @@ pub fn run() -> Result<()> {
                                 // Reload only the edited post, preserving unsaved changes on others
                                 match read_post(&path) {
                                     Ok(reloaded) => {
-                                        if let Some(post) = app.posts.iter_mut().find(|p| p.path == path) {
+                                        if let Some(post) =
+                                            app.posts.iter_mut().find(|p| p.path == path)
+                                        {
                                             *post = reloaded;
                                         }
                                         app.invalidate_filter();
                                         app.status_message = "✓ Reloaded after edit".to_string();
                                     }
                                     Err(e) => {
-                                        app.status_message = format!("✗ Error reloading post: {}", e);
+                                        app.status_message =
+                                            format!("✗ Error reloading post: {}", e);
                                     }
                                 }
                             }
@@ -2240,8 +2323,10 @@ pub fn run() -> Result<()> {
                                             format!("✓ Opening in browser: {}", url);
                                     }
                                     Err(e) => {
-                                        app.status_message =
-                                            format!("✗ Could not open browser ({}). URL: {}", e, url);
+                                        app.status_message = format!(
+                                            "✗ Could not open browser ({}). URL: {}",
+                                            e, url
+                                        );
                                     }
                                 }
                             } else {
@@ -2274,9 +2359,8 @@ pub fn run() -> Result<()> {
                     }
                     KeyCode::Char('S') => {
                         // Open site picker
-                        app.site_entries = MultiSiteConfig::load()
-                            .map(|m| m.sites)
-                            .unwrap_or_default();
+                        app.site_entries =
+                            MultiSiteConfig::load().map(|m| m.sites).unwrap_or_default();
                         // Pre-select the active site
                         app.site_picker_selected = app
                             .site_entries
@@ -2288,7 +2372,8 @@ pub fn run() -> Result<()> {
                     KeyCode::Char('n') => {
                         // Create new post — prompt for template if any exist
                         // Refresh template list first (user may have added one)
-                        app.template_names = templates::list_templates(&app.config).unwrap_or_default();
+                        app.template_names =
+                            templates::list_templates(&app.config).unwrap_or_default();
                         if app.template_names.is_empty() {
                             // No templates: skip picker, go straight to title prompt
                             app.template_selected = 0;
@@ -2319,7 +2404,8 @@ pub fn run() -> Result<()> {
                     }
                     KeyCode::Char('a') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                         // Select all currently filtered posts
-                        let all_paths: Vec<std::path::PathBuf> = app.filtered_indices
+                        let all_paths: Vec<std::path::PathBuf> = app
+                            .filtered_indices
                             .iter()
                             .map(|&i| app.posts[i].path.clone())
                             .collect();
@@ -2334,13 +2420,15 @@ pub fn run() -> Result<()> {
                             for path in all_paths {
                                 app.selected_posts.insert(path);
                             }
-                            app.status_message = format!("Selected {} post(s)", app.selected_posts.len());
+                            app.status_message =
+                                format!("Selected {} post(s)", app.selected_posts.len());
                         }
                     }
                     KeyCode::Char('b') => {
                         // Open batch menu (only if selection non-empty)
                         if app.selected_posts.is_empty() {
-                            app.status_message = "Select posts first (Space: toggle, Ctrl+A: all)".to_string();
+                            app.status_message =
+                                "Select posts first (Space: toggle, Ctrl+A: all)".to_string();
                         } else {
                             app.show_batch_menu = true;
                             app.batch_menu_idx = 0;
@@ -2390,13 +2478,23 @@ mod tests {
     use std::path::PathBuf;
     use tempfile::NamedTempFile;
 
-    fn make_post(title: &str, date: &str, draft: bool, categories: &[&str], tags: &[&str], content: &str) -> Post {
+    fn make_post(
+        title: &str,
+        date: &str,
+        draft: bool,
+        categories: &[&str],
+        tags: &[&str],
+        content: &str,
+    ) -> Post {
         let dt = chrono::DateTime::parse_from_rfc3339(date)
             .map(|d| d.with_timezone(&Utc))
             .ok();
         let fm: HashMap<String, serde_json::Value> = HashMap::new();
         Post {
-            path: PathBuf::from(format!("/tmp/test/{}.md", title.replace(' ', "-").to_lowercase())),
+            path: PathBuf::from(format!(
+                "/tmp/test/{}.md",
+                title.replace(' ', "-").to_lowercase()
+            )),
             title: title.to_string(),
             date: dt,
             draft,
@@ -2475,9 +2573,30 @@ mod tests {
 
     fn sample_posts() -> Vec<Post> {
         vec![
-            make_post("Alpha post", "2026-03-01T10:00:00Z", false, &["blog"], &["rust"], "Alpha content"),
-            make_post("Beta draft", "2026-03-15T10:00:00Z", true, &["docs"], &["tui"], "Beta draft content"),
-            make_post("Gamma post", "2026-02-01T10:00:00Z", false, &["blog", "tech"], &["rust", "cli"], "Gamma content about CLI tools"),
+            make_post(
+                "Alpha post",
+                "2026-03-01T10:00:00Z",
+                false,
+                &["blog"],
+                &["rust"],
+                "Alpha content",
+            ),
+            make_post(
+                "Beta draft",
+                "2026-03-15T10:00:00Z",
+                true,
+                &["docs"],
+                &["tui"],
+                "Beta draft content",
+            ),
+            make_post(
+                "Gamma post",
+                "2026-02-01T10:00:00Z",
+                false,
+                &["blog", "tech"],
+                &["rust", "cli"],
+                "Gamma content about CLI tools",
+            ),
         ]
     }
 
@@ -2534,9 +2653,9 @@ mod tests {
         app.invalidate_filter();
         app.ensure_filtered();
         let posts = app.get_filtered_posts();
-        assert_eq!(posts[0].title, "Beta draft");  // Mar 15
-        assert_eq!(posts[1].title, "Alpha post");  // Mar 1
-        assert_eq!(posts[2].title, "Gamma post");  // Feb 1
+        assert_eq!(posts[0].title, "Beta draft"); // Mar 15
+        assert_eq!(posts[1].title, "Alpha post"); // Mar 1
+        assert_eq!(posts[2].title, "Gamma post"); // Feb 1
 
         // DateAsc — oldest first
         app.sort_mode = SortMode::DateAsc;
@@ -2576,9 +2695,10 @@ mod tests {
         assert_eq!(app.dirty_count(), 1);
 
         // Modify another
-        app.posts[2]
-            .frontmatter
-            .insert("title".to_string(), serde_json::Value::String("Changed".to_string()));
+        app.posts[2].frontmatter.insert(
+            "title".to_string(),
+            serde_json::Value::String("Changed".to_string()),
+        );
         assert_eq!(app.dirty_count(), 2);
     }
 
@@ -2680,7 +2800,14 @@ mod tests {
     #[test]
     fn test_visual_line_count() {
         let long_content = "a".repeat(200); // 200 chars in 80-wide pane = 3 visual lines
-        let posts = vec![make_post("Long post", "2026-03-01T10:00:00Z", false, &[], &[], &long_content)];
+        let posts = vec![make_post(
+            "Long post",
+            "2026-03-01T10:00:00Z",
+            false,
+            &[],
+            &[],
+            &long_content,
+        )];
         let mut app = make_app(posts);
         app.content_area_width = 80;
         app.ensure_filtered();
@@ -2724,8 +2851,14 @@ mod tests {
         app.save_all();
 
         let saved = std::fs::read_to_string(f.path()).unwrap();
-        assert!(saved.contains("Updated content."), "save_all should write content to disk");
-        assert!(app.status_message.contains("✓ Saved"), "status should confirm save");
+        assert!(
+            saved.contains("Updated content."),
+            "save_all should write content to disk"
+        );
+        assert!(
+            app.status_message.contains("✓ Saved"),
+            "status should confirm save"
+        );
     }
 
     #[test]
@@ -2742,16 +2875,32 @@ mod tests {
         app.save_all();
 
         // Post should no longer be dirty — originals were synced from disk
-        assert!(!App::is_dirty(&app.posts[0]), "post should be clean after save_all syncs originals");
+        assert!(
+            !App::is_dirty(&app.posts[0]),
+            "post should be clean after save_all syncs originals"
+        );
     }
 
     // --- delete_metadata_field tests ---
 
     #[test]
     fn test_delete_metadata_field_removes_key() {
-        let mut post = make_post("Delete test", "2026-03-01T10:00:00Z", false, &[], &[], "content");
-        post.frontmatter.insert("author".to_string(), serde_json::Value::String("Paul".to_string()));
-        post.frontmatter.insert("title".to_string(), serde_json::Value::String("Delete test".to_string()));
+        let mut post = make_post(
+            "Delete test",
+            "2026-03-01T10:00:00Z",
+            false,
+            &[],
+            &[],
+            "content",
+        );
+        post.frontmatter.insert(
+            "author".to_string(),
+            serde_json::Value::String("Paul".to_string()),
+        );
+        post.frontmatter.insert(
+            "title".to_string(),
+            serde_json::Value::String("Delete test".to_string()),
+        );
 
         let mut app = make_app(vec![post]);
         app.focused_pane = 1;
@@ -2761,14 +2910,27 @@ mod tests {
         app.metadata_selected = 0; // "author"
         app.delete_metadata_field();
 
-        assert!(!app.posts[0].frontmatter.contains_key("author"), "author field should be deleted");
+        assert!(
+            !app.posts[0].frontmatter.contains_key("author"),
+            "author field should be deleted"
+        );
         assert!(app.status_message.contains("✓ Deleted field: author"));
     }
 
     #[test]
     fn test_delete_metadata_field_blocks_title() {
-        let mut post = make_post("Title test", "2026-03-01T10:00:00Z", false, &[], &[], "content");
-        post.frontmatter.insert("title".to_string(), serde_json::Value::String("Title test".to_string()));
+        let mut post = make_post(
+            "Title test",
+            "2026-03-01T10:00:00Z",
+            false,
+            &[],
+            &[],
+            "content",
+        );
+        post.frontmatter.insert(
+            "title".to_string(),
+            serde_json::Value::String("Title test".to_string()),
+        );
 
         let mut app = make_app(vec![post]);
         app.focused_pane = 1;
@@ -2778,14 +2940,27 @@ mod tests {
         app.metadata_selected = 0;
         app.delete_metadata_field();
 
-        assert!(app.posts[0].frontmatter.contains_key("title"), "title should not be deletable");
+        assert!(
+            app.posts[0].frontmatter.contains_key("title"),
+            "title should not be deletable"
+        );
         assert_eq!(app.status_message, "✗ Cannot delete title field");
     }
 
     #[test]
     fn test_delete_metadata_field_wrong_pane() {
-        let mut post = make_post("Pane test", "2026-03-01T10:00:00Z", false, &[], &[], "content");
-        post.frontmatter.insert("author".to_string(), serde_json::Value::String("Paul".to_string()));
+        let mut post = make_post(
+            "Pane test",
+            "2026-03-01T10:00:00Z",
+            false,
+            &[],
+            &[],
+            "content",
+        );
+        post.frontmatter.insert(
+            "author".to_string(),
+            serde_json::Value::String("Paul".to_string()),
+        );
 
         let mut app = make_app(vec![post]);
         app.focused_pane = 0; // posts pane, not metadata
@@ -2793,7 +2968,10 @@ mod tests {
         app.metadata_selected = 0;
         app.delete_metadata_field();
 
-        assert!(app.posts[0].frontmatter.contains_key("author"), "field should not be deleted when focused_pane != 1");
+        assert!(
+            app.posts[0].frontmatter.contains_key("author"),
+            "field should not be deleted when focused_pane != 1"
+        );
         assert_eq!(app.status_message, "", "no status message when wrong pane");
     }
 
@@ -2801,7 +2979,14 @@ mod tests {
 
     #[test]
     fn test_revert_selected_restores_content() {
-        let mut post = make_post("Revert test", "2026-03-01T10:00:00Z", false, &[], &[], "Original content");
+        let mut post = make_post(
+            "Revert test",
+            "2026-03-01T10:00:00Z",
+            false,
+            &[],
+            &[],
+            "Original content",
+        );
         let original_content = post.content.clone();
         post.content = "Modified content".to_string();
 
@@ -2809,8 +2994,14 @@ mod tests {
         app.ensure_filtered();
         app.revert_selected();
 
-        assert_eq!(app.posts[0].content, original_content, "content should be reverted");
-        assert!(!App::is_dirty(&app.posts[0]), "post should be clean after revert");
+        assert_eq!(
+            app.posts[0].content, original_content,
+            "content should be reverted"
+        );
+        assert!(
+            !App::is_dirty(&app.posts[0]),
+            "post should be clean after revert"
+        );
         assert!(app.status_message.starts_with("Reverted:"));
     }
 
@@ -2826,7 +3017,14 @@ mod tests {
 
     #[test]
     fn test_apply_smartquotes_transforms_content() {
-        let posts = vec![make_post("Quote test", "2026-03-01T10:00:00Z", false, &[], &[], "He said \"hello world\".")];
+        let posts = vec![make_post(
+            "Quote test",
+            "2026-03-01T10:00:00Z",
+            false,
+            &[],
+            &[],
+            "He said \"hello world\".",
+        )];
         let mut app = make_app(posts);
         app.focused_pane = 2;
         app.ensure_filtered();
@@ -2842,13 +3040,23 @@ mod tests {
     #[test]
     fn test_apply_smartquotes_wrong_pane() {
         let original = "He said \"hello\".".to_string();
-        let posts = vec![make_post("Quote test", "2026-03-01T10:00:00Z", false, &[], &[], &original)];
+        let posts = vec![make_post(
+            "Quote test",
+            "2026-03-01T10:00:00Z",
+            false,
+            &[],
+            &[],
+            &original,
+        )];
         let mut app = make_app(posts);
         app.focused_pane = 0; // posts pane, not content
         app.ensure_filtered();
         app.apply_smartquotes();
 
-        assert_eq!(app.posts[0].content, original, "content should not change when focused_pane != 2");
+        assert_eq!(
+            app.posts[0].content, original,
+            "content should not change when focused_pane != 2"
+        );
         assert_eq!(app.status_message, "", "no status message when wrong pane");
     }
 

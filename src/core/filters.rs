@@ -49,7 +49,10 @@ impl PropertyFilter {
         }
         let field = parts[0].trim().to_string();
         let op = FilterOp::parse(parts[1].trim())?;
-        let value = parts.get(2).map(|v| v.trim().to_string()).unwrap_or_default();
+        let value = parts
+            .get(2)
+            .map(|v| v.trim().to_string())
+            .unwrap_or_default();
 
         // Validate: contains and equals need a value
         if matches!(op, FilterOp::Contains | FilterOp::Equals) && value.is_empty() {
@@ -74,9 +77,7 @@ impl PropertyFilter {
         let fm_value = post.frontmatter.get(&self.field);
 
         match &self.op {
-            FilterOp::IsTrue => fm_value
-                .and_then(|v| v.as_bool())
-                .unwrap_or(false),
+            FilterOp::IsTrue => fm_value.and_then(|v| v.as_bool()).unwrap_or(false),
             FilterOp::IsFalse => {
                 // is_false: field is present and false, OR field absent (treat as false)
                 match fm_value {
@@ -90,9 +91,11 @@ impl PropertyFilter {
                     Some(serde_json::Value::String(s)) => s.to_lowercase() == target,
                     Some(serde_json::Value::Bool(b)) => b.to_string() == target,
                     Some(serde_json::Value::Number(n)) => n.to_string() == target,
-                    Some(serde_json::Value::Array(arr)) => arr
-                        .iter()
-                        .any(|v| v.as_str().map(|s| s.to_lowercase() == target).unwrap_or(false)),
+                    Some(serde_json::Value::Array(arr)) => arr.iter().any(|v| {
+                        v.as_str()
+                            .map(|s| s.to_lowercase() == target)
+                            .unwrap_or(false)
+                    }),
                     _ => false,
                 }
             }
@@ -100,9 +103,11 @@ impl PropertyFilter {
                 let target = self.value.to_lowercase();
                 match fm_value {
                     Some(serde_json::Value::String(s)) => s.to_lowercase().contains(&target),
-                    Some(serde_json::Value::Array(arr)) => arr
-                        .iter()
-                        .any(|v| v.as_str().map(|s| s.to_lowercase().contains(&target)).unwrap_or(false)),
+                    Some(serde_json::Value::Array(arr)) => arr.iter().any(|v| {
+                        v.as_str()
+                            .map(|s| s.to_lowercase().contains(&target))
+                            .unwrap_or(false)
+                    }),
                     _ => false,
                 }
             }
@@ -115,12 +120,15 @@ mod tests {
     use super::*;
     use std::collections::HashMap;
     use std::path::PathBuf;
-    use chrono::Utc;
 
     fn make_post_with_fm(fm: HashMap<String, serde_json::Value>) -> Post {
         let mut post = Post {
             path: PathBuf::from("/tmp/test.md"),
-            title: fm.get("title").and_then(|v| v.as_str()).unwrap_or("Test").to_string(),
+            title: fm
+                .get("title")
+                .and_then(|v| v.as_str())
+                .unwrap_or("Test")
+                .to_string(),
             date: None,
             draft: fm.get("draft").and_then(|v| v.as_bool()).unwrap_or(false),
             content_type: String::new(),
@@ -138,7 +146,10 @@ mod tests {
     }
 
     fn fm_with(pairs: &[(&str, serde_json::Value)]) -> HashMap<String, serde_json::Value> {
-        pairs.iter().map(|(k, v)| (k.to_string(), v.clone())).collect()
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.clone()))
+            .collect()
     }
 
     #[test]
@@ -183,21 +194,23 @@ mod tests {
 
     #[test]
     fn test_matches_contains_string() {
-        let post = make_post_with_fm(fm_with(&[
-            ("title", serde_json::Value::String("Rust and TUI".to_string())),
-        ]));
+        let post = make_post_with_fm(fm_with(&[(
+            "title",
+            serde_json::Value::String("Rust and TUI".to_string()),
+        )]));
         let f = PropertyFilter::parse("title:contains:rust").unwrap();
         assert!(f.matches(&post));
     }
 
     #[test]
     fn test_matches_contains_array() {
-        let post = make_post_with_fm(fm_with(&[
-            ("tags", serde_json::Value::Array(vec![
+        let post = make_post_with_fm(fm_with(&[(
+            "tags",
+            serde_json::Value::Array(vec![
                 serde_json::Value::String("rust".to_string()),
                 serde_json::Value::String("cli".to_string()),
-            ])),
-        ]));
+            ]),
+        )]));
         let f = PropertyFilter::parse("tags:contains:rust").unwrap();
         assert!(f.matches(&post));
 
@@ -207,24 +220,21 @@ mod tests {
 
     #[test]
     fn test_matches_equals_case_insensitive() {
-        let post = make_post_with_fm(fm_with(&[
-            ("content_type", serde_json::Value::String("Tutorial".to_string())),
-        ]));
+        let post = make_post_with_fm(fm_with(&[(
+            "content_type",
+            serde_json::Value::String("Tutorial".to_string()),
+        )]));
         let f = PropertyFilter::parse("content_type:equals:tutorial").unwrap();
         assert!(f.matches(&post));
     }
 
     #[test]
     fn test_matches_is_true() {
-        let post = make_post_with_fm(fm_with(&[
-            ("draft", serde_json::Value::Bool(true)),
-        ]));
+        let post = make_post_with_fm(fm_with(&[("draft", serde_json::Value::Bool(true))]));
         let f = PropertyFilter::parse("draft:is_true").unwrap();
         assert!(f.matches(&post));
 
-        let post2 = make_post_with_fm(fm_with(&[
-            ("draft", serde_json::Value::Bool(false)),
-        ]));
+        let post2 = make_post_with_fm(fm_with(&[("draft", serde_json::Value::Bool(false))]));
         assert!(!f.matches(&post2));
     }
 

@@ -8,16 +8,11 @@ use walkdir::WalkDir;
 
 use super::config::{Config, SsgType};
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub enum FrontmatterFormat {
+    #[default]
     Yaml,
     Toml,
-}
-
-impl Default for FrontmatterFormat {
-    fn default() -> Self {
-        FrontmatterFormat::Yaml
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -87,12 +82,22 @@ fn toml_value_to_json(value: &toml::Value) -> serde_json::Value {
 /// Returns (parsed HashMap, body text, raw frontmatter text, format)
 fn parse_frontmatter(
     content: &str,
-) -> Result<(HashMap<String, serde_json::Value>, String, String, FrontmatterFormat)> {
+) -> Result<(
+    HashMap<String, serde_json::Value>,
+    String,
+    String,
+    FrontmatterFormat,
+)> {
     // Detect TOML frontmatter (+++...+++)
     if content.starts_with("+++") {
         let parts: Vec<&str> = content.splitn(3, "+++").collect();
         if parts.len() < 3 {
-            return Ok((HashMap::new(), content.to_string(), String::new(), FrontmatterFormat::Toml));
+            return Ok((
+                HashMap::new(),
+                content.to_string(),
+                String::new(),
+                FrontmatterFormat::Toml,
+            ));
         }
 
         let raw_toml = parts[1].to_string();
@@ -124,12 +129,22 @@ fn parse_frontmatter(
 
     // Detect YAML frontmatter (---...---)
     if !content.starts_with("---") {
-        return Ok((HashMap::new(), content.to_string(), String::new(), FrontmatterFormat::Yaml));
+        return Ok((
+            HashMap::new(),
+            content.to_string(),
+            String::new(),
+            FrontmatterFormat::Yaml,
+        ));
     }
 
     let parts: Vec<&str> = content.splitn(3, "---").collect();
     if parts.len() < 3 {
-        return Ok((HashMap::new(), content.to_string(), String::new(), FrontmatterFormat::Yaml));
+        return Ok((
+            HashMap::new(),
+            content.to_string(),
+            String::new(),
+            FrontmatterFormat::Yaml,
+        ));
     }
 
     let raw_yaml = parts[1].to_string();
@@ -207,27 +222,47 @@ impl Post {
     /// Sync struct fields (title, date, draft, etc.) from the frontmatter HashMap.
     /// Call after any mutation to frontmatter to keep struct fields consistent.
     pub fn sync_fields_from_frontmatter(&mut self) {
-        self.title = self.frontmatter.get("title")
+        self.title = self
+            .frontmatter
+            .get("title")
             .and_then(|v| v.as_str())
             .unwrap_or("Untitled")
             .to_string();
-        self.date = self.frontmatter.get("date")
+        self.date = self
+            .frontmatter
+            .get("date")
             .and_then(|v| v.as_str())
             .and_then(parse_date_string);
-        self.draft = self.frontmatter.get("draft")
+        self.draft = self
+            .frontmatter
+            .get("draft")
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
-        self.content_type = self.frontmatter.get("content_type")
+        self.content_type = self
+            .frontmatter
+            .get("content_type")
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_string();
-        self.tags = self.frontmatter.get("tags")
+        self.tags = self
+            .frontmatter
+            .get("tags")
             .and_then(|v| v.as_array())
-            .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect()
+            })
             .unwrap_or_default();
-        self.categories = self.frontmatter.get("categories")
+        self.categories = self
+            .frontmatter
+            .get("categories")
             .and_then(|v| v.as_array())
-            .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect()
+            })
             .unwrap_or_default();
     }
 }
@@ -286,7 +321,10 @@ pub fn scan_posts(config: &Config) -> Result<ScanResult> {
         let entry = match entry_result {
             Ok(e) => e,
             Err(e) => {
-                let path = e.path().unwrap_or(std::path::Path::new("<unknown>")).to_path_buf();
+                let path = e
+                    .path()
+                    .unwrap_or(std::path::Path::new("<unknown>"))
+                    .to_path_buf();
                 errors.push((path, format!("IO error: {}", e)));
                 continue;
             }
@@ -394,7 +432,9 @@ fn find_key_lines(lines: &[&str], key: &str) -> Option<(usize, usize)> {
 /// Serialize a serde_json::Value as inline TOML suitable for frontmatter
 fn value_to_toml_inline(value: &serde_json::Value) -> String {
     match value {
-        serde_json::Value::String(s) => format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\"")),
+        serde_json::Value::String(s) => {
+            format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\""))
+        }
         serde_json::Value::Bool(b) => b.to_string(),
         serde_json::Value::Number(n) => n.to_string(),
         serde_json::Value::Array(arr) => {
@@ -429,7 +469,10 @@ fn find_toml_key_lines(lines: &[&str], key: &str) -> Option<(usize, usize)> {
                 // A new top-level key: word followed by =
                 if let Some(eq_pos) = trimmed.find('=') {
                     let before_eq = trimmed[..eq_pos].trim();
-                    !before_eq.is_empty() && before_eq.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '-')
+                    !before_eq.is_empty()
+                        && before_eq
+                            .chars()
+                            .all(|c| c.is_alphanumeric() || c == '_' || c == '-')
                 } else {
                     false
                 }
@@ -454,8 +497,13 @@ fn atomic_write(path: &Path, content: &str) -> Result<()> {
             .with_context(|| format!("Failed to write temp file: {}", tmp_path.display()))?;
         f.sync_all()
             .with_context(|| format!("Failed to sync temp file: {}", tmp_path.display()))?;
-        fs::rename(&tmp_path, path)
-            .with_context(|| format!("Failed to rename {} to {}", tmp_path.display(), path.display()))?;
+        fs::rename(&tmp_path, path).with_context(|| {
+            format!(
+                "Failed to rename {} to {}",
+                tmp_path.display(),
+                path.display()
+            )
+        })?;
         Ok(())
     })();
 
@@ -476,7 +524,10 @@ pub fn save_post(post: &Post) -> Result<()> {
 
     // If frontmatter is unchanged, write back the original file exactly
     if post.frontmatter == post.original_frontmatter {
-        let full_content = format!("{}{}{}\n\n{}\n", open_delim, post.raw_frontmatter, close_delim, post.content);
+        let full_content = format!(
+            "{}{}{}\n\n{}\n",
+            open_delim, post.raw_frontmatter, close_delim, post.content
+        );
         atomic_write(&post.path, &full_content)?;
         return Ok(());
     }
@@ -584,7 +635,10 @@ pub fn save_post(post: &Post) -> Result<()> {
 
     // Reconstruct the file
     let frontmatter_text = result_lines.join("\n");
-    let full_content = format!("{}\n{}\n{}\n\n{}\n", open_delim, frontmatter_text, close_delim, post.content);
+    let full_content = format!(
+        "{}\n{}\n{}\n\n{}\n",
+        open_delim, frontmatter_text, close_delim, post.content
+    );
 
     atomic_write(&post.path, &full_content)?;
 
@@ -655,7 +709,11 @@ pub fn create_post(config: &Config, options: &CreatePostOptions) -> Result<PathB
         ];
         if let Some(cat) = &options.category {
             let escaped = cat.replace('"', "\\\"");
-            lines.push(format!("categories: [\"{}\"]\n", escaped).trim_end_matches('\n').to_string());
+            lines.push(
+                format!("categories: [\"{}\"]\n", escaped)
+                    .trim_end_matches('\n')
+                    .to_string(),
+            );
         }
         if let Some(tags) = &options.tags {
             let quoted: Vec<String> = tags
@@ -679,7 +737,13 @@ fn slugify(title: &str) -> String {
     title
         .to_lowercase()
         .chars()
-        .map(|c| if c.is_alphanumeric() || c == ' ' { c } else { ' ' })
+        .map(|c| {
+            if c.is_alphanumeric() || c == ' ' {
+                c
+            } else {
+                ' '
+            }
+        })
         .collect::<String>()
         .split_whitespace()
         .collect::<Vec<&str>>()
@@ -771,10 +835,8 @@ fn is_opening_context(chars: &[char], i: usize) -> bool {
 mod tests {
     /// Reverse smart quote conversion: curly quotes back to straight, em dash to --, ellipsis to ...
     fn straightquotes(text: &str) -> String {
-        text.replace('\u{201C}', "\"")
-            .replace('\u{201D}', "\"")
-            .replace('\u{2018}', "'")
-            .replace('\u{2019}', "'")
+        text.replace(['\u{201C}', '\u{201D}'], "\"")
+            .replace(['\u{2018}', '\u{2019}'], "'")
             .replace('\u{2014}', "--")
             .replace('\u{2026}', "...")
     }
@@ -900,10 +962,7 @@ mod tests {
 
     #[test]
     fn test_slugify_special_chars() {
-        assert_eq!(
-            slugify("Hello, World! It's 2026"),
-            "hello-world-it-s-2026"
-        );
+        assert_eq!(slugify("Hello, World! It's 2026"), "hello-world-it-s-2026");
     }
 
     #[test]
@@ -1211,14 +1270,18 @@ mod tests {
             "TOML post should preserve +++ delimiters, got: {}",
             saved
         );
-        assert!(saved.contains("+++\n\n"), "Should have closing +++ delimiter");
+        assert!(
+            saved.contains("+++\n\n"),
+            "Should have closing +++ delimiter"
+        );
         assert!(saved.contains("title = \"Updated TOML\""));
         assert!(!saved.contains("---"), "Should not contain YAML delimiters");
     }
 
     #[test]
     fn test_save_toml_preserves_field_order_on_edit() {
-        let original = "+++\ntitle = \"Original\"\ndate = 2025-01-15T10:00:00Z\ndraft = true\n+++\n\nBody.\n";
+        let original =
+            "+++\ntitle = \"Original\"\ndate = 2025-01-15T10:00:00Z\ndraft = true\n+++\n\nBody.\n";
         let f = create_temp_post(original);
         let mut post = read_post(f.path()).unwrap();
 
@@ -1319,7 +1382,10 @@ mod tests {
             "Should report IO errors for unreadable directory"
         );
         assert!(
-            result.errors.iter().any(|(_, msg)| msg.contains("IO error")),
+            result
+                .errors
+                .iter()
+                .any(|(_, msg)| msg.contains("IO error")),
             "Error should be tagged as IO error"
         );
 
@@ -1336,7 +1402,9 @@ mod tests {
         assert_eq!(post.title, "Untitled");
         assert!(post.frontmatter.is_empty());
         assert_eq!(post.format, FrontmatterFormat::Yaml);
-        assert!(post.content.starts_with("Just plain markdown with no frontmatter."));
+        assert!(post
+            .content
+            .starts_with("Just plain markdown with no frontmatter."));
     }
 
     #[test]
@@ -1363,10 +1431,7 @@ mod tests {
 
     #[test]
     fn test_smartquotes_code_span_skip() {
-        assert_eq!(
-            smartquotes(r#"use `"raw"` here"#),
-            "use `\"raw\"` here"
-        );
+        assert_eq!(smartquotes(r#"use `"raw"` here"#), "use `\"raw\"` here");
     }
 
     #[test]

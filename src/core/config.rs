@@ -83,7 +83,8 @@ impl Config {
         Self::load_from_file(&path)
     }
 
-    /// Load config from a specific config directory
+    /// Load config from a specific config directory (used in tests)
+    #[allow(dead_code)]
     pub fn load_from(config_dir: &Path) -> Result<Self> {
         let path = config_dir.join("config.json");
         Self::load_from_file(&path)
@@ -100,8 +101,8 @@ impl Config {
 
         // Detect format: multi-site has a "sites" array at top level
         if json.get("sites").is_some() {
-            let multi: MultiSiteConfig = serde_json::from_value(json)
-                .context("Failed to parse multi-site config")?;
+            let multi: MultiSiteConfig =
+                serde_json::from_value(json).context("Failed to parse multi-site config")?;
             return multi.active_config();
         }
 
@@ -118,7 +119,8 @@ impl Config {
         self.save_to_file(&path)
     }
 
-    /// Save config to a specific config directory
+    /// Save config to a specific config directory (used in tests)
+    #[allow(dead_code)]
     pub fn save_to(&self, config_dir: &Path) -> Result<()> {
         fs::create_dir_all(config_dir)?;
         let path = config_dir.join("config.json");
@@ -140,7 +142,8 @@ impl Config {
                     })
                 } else {
                     // Legacy single-site — migrate
-                    let legacy: Config = serde_json::from_str(&content).unwrap_or_else(|_| self.clone());
+                    let legacy: Config =
+                        serde_json::from_str(&content).unwrap_or_else(|_| self.clone());
                     MultiSiteConfig {
                         sites: vec![SiteEntry {
                             name: legacy.site_name.clone(),
@@ -311,8 +314,8 @@ impl MultiSiteConfig {
             serde_json::from_str(&content).context("Failed to parse config")?;
 
         if json.get("sites").is_some() {
-            let multi: MultiSiteConfig = serde_json::from_value(json)
-                .context("Failed to parse multi-site config")?;
+            let multi: MultiSiteConfig =
+                serde_json::from_value(json).context("Failed to parse multi-site config")?;
             return Ok(multi);
         }
 
@@ -390,7 +393,10 @@ pub fn sites_add_to(
     };
 
     if multi.sites.iter().any(|s| s.name == name) {
-        anyhow::bail!("Site '{}' already exists. Use a different name with --name.", name);
+        anyhow::bail!(
+            "Site '{}' already exists. Use a different name with --name.",
+            name
+        );
     }
 
     multi.sites.push(SiteEntry {
@@ -417,9 +423,11 @@ pub fn sites_add_to(
 /// List all registered sites. Returns (name, path, is_active).
 pub fn sites_list() -> Result<Vec<(String, String, bool)>> {
     let multi = MultiSiteConfig::load()?;
-    Ok(multi.sites.iter().map(|s| {
-        (s.name.clone(), s.path.clone(), s.name == multi.active_site)
-    }).collect())
+    Ok(multi
+        .sites
+        .iter()
+        .map(|s| (s.name.clone(), s.path.clone(), s.name == multi.active_site))
+        .collect())
 }
 
 /// Switch the active site by name.
@@ -439,7 +447,11 @@ pub fn sites_use_in(name: &str, config_dir: Option<&Path>) -> Result<()> {
         anyhow::bail!(
             "Site '{}' not found. Available: {}",
             name,
-            if names.is_empty() { "none".to_string() } else { names.join(", ") }
+            if names.is_empty() {
+                "none".to_string()
+            } else {
+                names.join(", ")
+            }
         );
     }
 
@@ -480,7 +492,8 @@ pub fn configure_site(path: &str) -> Result<()> {
     Ok(())
 }
 
-/// Configure textorium to use a site, saving config to a specific directory
+/// Configure textorium to use a site, saving config to a specific directory (used in tests)
+#[allow(dead_code)]
 pub fn configure_site_to(path: &str, config_dir: &Path) -> Result<()> {
     let config = build_site_config(path)?;
     config.save_to(config_dir)?;
@@ -541,10 +554,7 @@ mod tests {
     fn test_detect_ssg_eleventy() {
         let dir = tempfile::tempdir().unwrap();
         fs::write(dir.path().join(".eleventy.js"), "").unwrap();
-        assert_eq!(
-            detect_ssg(&dir.path().to_string_lossy()),
-            SsgType::Eleventy
-        );
+        assert_eq!(detect_ssg(&dir.path().to_string_lossy()), SsgType::Eleventy);
     }
 
     #[test]
@@ -716,8 +726,18 @@ mod tests {
         let site_a = make_site_dir("blog", "hugo.toml");
         let site_b = make_site_dir("docs", "hugo.toml");
 
-        sites_add_to(site_a.path().to_str().unwrap(), Some("blog"), Some(config_dir.path())).unwrap();
-        sites_add_to(site_b.path().to_str().unwrap(), Some("docs"), Some(config_dir.path())).unwrap();
+        sites_add_to(
+            site_a.path().to_str().unwrap(),
+            Some("blog"),
+            Some(config_dir.path()),
+        )
+        .unwrap();
+        sites_add_to(
+            site_b.path().to_str().unwrap(),
+            Some("docs"),
+            Some(config_dir.path()),
+        )
+        .unwrap();
 
         let multi = MultiSiteConfig::load_from(config_dir.path()).unwrap();
         assert_eq!(multi.sites.len(), 2);
@@ -730,8 +750,18 @@ mod tests {
         let site_a = make_site_dir("blog", "hugo.toml");
         let site_b = make_site_dir("docs", "hugo.toml");
 
-        sites_add_to(site_a.path().to_str().unwrap(), Some("blog"), Some(config_dir.path())).unwrap();
-        sites_add_to(site_b.path().to_str().unwrap(), Some("docs"), Some(config_dir.path())).unwrap();
+        sites_add_to(
+            site_a.path().to_str().unwrap(),
+            Some("blog"),
+            Some(config_dir.path()),
+        )
+        .unwrap();
+        sites_add_to(
+            site_b.path().to_str().unwrap(),
+            Some("docs"),
+            Some(config_dir.path()),
+        )
+        .unwrap();
 
         sites_use_in("docs", Some(config_dir.path())).unwrap();
 
@@ -743,7 +773,12 @@ mod tests {
     fn test_multi_site_use_unknown_fails() {
         let config_dir = tempfile::tempdir().unwrap();
         let site_a = make_site_dir("blog", "hugo.toml");
-        sites_add_to(site_a.path().to_str().unwrap(), Some("blog"), Some(config_dir.path())).unwrap();
+        sites_add_to(
+            site_a.path().to_str().unwrap(),
+            Some("blog"),
+            Some(config_dir.path()),
+        )
+        .unwrap();
 
         let result = sites_use_in("nonexistent", Some(config_dir.path()));
         assert!(result.is_err());
@@ -763,7 +798,8 @@ mod tests {
         fs::write(
             config_dir.path().join("config.json"),
             serde_json::to_string_pretty(&legacy).unwrap(),
-        ).unwrap();
+        )
+        .unwrap();
 
         let config = Config::load_from(config_dir.path()).unwrap();
         assert_eq!(config.site_name, "old-blog");
@@ -776,8 +812,18 @@ mod tests {
         let site_a = make_site_dir("blog", "hugo.toml");
         let site_b = make_site_dir("docs", "hugo.toml");
 
-        sites_add_to(site_a.path().to_str().unwrap(), Some("blog"), Some(config_dir.path())).unwrap();
-        sites_add_to(site_b.path().to_str().unwrap(), Some("docs"), Some(config_dir.path())).unwrap();
+        sites_add_to(
+            site_a.path().to_str().unwrap(),
+            Some("blog"),
+            Some(config_dir.path()),
+        )
+        .unwrap();
+        sites_add_to(
+            site_b.path().to_str().unwrap(),
+            Some("docs"),
+            Some(config_dir.path()),
+        )
+        .unwrap();
 
         // Active is "blog" (first added)
         let config = Config::load_from(config_dir.path()).unwrap();
@@ -789,8 +835,17 @@ mod tests {
         let config_dir = tempfile::tempdir().unwrap();
         let site_a = make_site_dir("blog", "hugo.toml");
 
-        sites_add_to(site_a.path().to_str().unwrap(), Some("blog"), Some(config_dir.path())).unwrap();
-        let result = sites_add_to(site_a.path().to_str().unwrap(), Some("blog"), Some(config_dir.path()));
+        sites_add_to(
+            site_a.path().to_str().unwrap(),
+            Some("blog"),
+            Some(config_dir.path()),
+        )
+        .unwrap();
+        let result = sites_add_to(
+            site_a.path().to_str().unwrap(),
+            Some("blog"),
+            Some(config_dir.path()),
+        );
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("already exists"));
     }

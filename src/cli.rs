@@ -155,7 +155,8 @@ pub fn run(cli: Cli) -> Result<()> {
                 anyhow::bail!("No site configured. Run: textorium use <path>");
             }
 
-            let tag_list: Option<Vec<String>> = tags.map(|t| t.split(',').map(|s| s.trim().to_string()).collect());
+            let tag_list: Option<Vec<String>> =
+                tags.map(|t| t.split(',').map(|s| s.trim().to_string()).collect());
 
             // Load template fields if --template was given
             let template_fields = if let Some(ref tname) = template {
@@ -201,7 +202,11 @@ pub fn run(cli: Cli) -> Result<()> {
                         println!("Available templates:");
                         for name in &names {
                             let dir = crate::core::templates::templates_dir(&config);
-                            println!("  {}  ({})", name, dir.join(format!("{}.yaml", name)).display());
+                            println!(
+                                "  {}  ({})",
+                                name,
+                                dir.join(format!("{}.yaml", name)).display()
+                            );
                         }
                     }
                 }
@@ -212,36 +217,34 @@ pub fn run(cli: Cli) -> Result<()> {
                 }
             }
         }
-        Some(Commands::Sites { action }) => {
-            match action {
-                SitesAction::Add { path, name } => {
-                    let site_name = crate::core::config::sites_add(&path, name.as_deref())?;
-                    println!("✓ Added site '{}'", site_name);
-                    println!("Run: textorium sites use {} — to make it active", site_name);
-                }
-                SitesAction::List => {
-                    let sites = crate::core::config::sites_list()?;
-                    if sites.is_empty() {
-                        println!("No sites registered. Run: textorium sites add <path>");
-                    } else {
-                        println!("{:<20} {:<8} {}", "Name", "Active", "Path");
-                        println!("{}", "-".repeat(60));
-                        for (name, path, active) in &sites {
-                            let marker = if *active { "✓" } else { "" };
-                            println!("{:<20} {:<8} {}", name, marker, path);
-                        }
+        Some(Commands::Sites { action }) => match action {
+            SitesAction::Add { path, name } => {
+                let site_name = crate::core::config::sites_add(&path, name.as_deref())?;
+                println!("✓ Added site '{}'", site_name);
+                println!("Run: textorium sites use {} — to make it active", site_name);
+            }
+            SitesAction::List => {
+                let sites = crate::core::config::sites_list()?;
+                if sites.is_empty() {
+                    println!("No sites registered. Run: textorium sites add <path>");
+                } else {
+                    println!("{:<20} {:<8} Path", "Name", "Active");
+                    println!("{}", "-".repeat(60));
+                    for (name, path, active) in &sites {
+                        let marker = if *active { "✓" } else { "" };
+                        println!("{:<20} {:<8} {}", name, marker, path);
                     }
                 }
-                SitesAction::Use { name } => {
-                    crate::core::config::sites_use(&name)?;
-                    println!("✓ Switched to site '{}'", name);
-                }
-                SitesAction::Remove { name } => {
-                    crate::core::config::sites_remove(&name)?;
-                    println!("✓ Removed site '{}'", name);
-                }
             }
-        }
+            SitesAction::Use { name } => {
+                crate::core::config::sites_use(&name)?;
+                println!("✓ Switched to site '{}'", name);
+            }
+            SitesAction::Remove { name } => {
+                crate::core::config::sites_remove(&name)?;
+                println!("✓ Removed site '{}'", name);
+            }
+        },
         Some(Commands::List {
             drafts,
             category,
@@ -277,7 +280,10 @@ pub fn run(cli: Cli) -> Result<()> {
                     .filter_map(|s| {
                         let f = crate::core::filters::PropertyFilter::parse(s);
                         if f.is_none() {
-                            eprintln!("Warning: invalid filter '{}' (expected field:op[:value])", s);
+                            eprintln!(
+                                "Warning: invalid filter '{}' (expected field:op[:value])",
+                                s
+                            );
                         }
                         f
                     })
@@ -306,10 +312,7 @@ pub fn run(cli: Cli) -> Result<()> {
                 if posts.is_empty() {
                     println!("No posts found.");
                 } else {
-                    println!(
-                        "{:<50} {:<12} {:<8} Path",
-                        "Title", "Date", "Status"
-                    );
+                    println!("{:<50} {:<12} {:<8} Path", "Title", "Date", "Status");
                     println!("{}", "-".repeat(100));
                     for p in &posts {
                         let date_str = p
@@ -318,10 +321,7 @@ pub fn run(cli: Cli) -> Result<()> {
                             .unwrap_or_else(|| "—".to_string());
                         let status = if p.draft { "draft" } else { "published" };
                         let title = if p.title.chars().count() > 48 {
-                            format!(
-                                "{}…",
-                                p.title.chars().take(47).collect::<String>()
-                            )
+                            format!("{}…", p.title.chars().take(47).collect::<String>())
                         } else {
                             p.title.clone()
                         };
@@ -349,16 +349,16 @@ pub fn run(cli: Cli) -> Result<()> {
             let slugs: Vec<String> = result
                 .posts
                 .iter()
-                .filter_map(|p| p.path.file_stem().and_then(|s| s.to_str().map(String::from)))
+                .filter_map(|p| {
+                    p.path
+                        .file_stem()
+                        .and_then(|s| s.to_str().map(String::from))
+                })
                 .collect();
 
             // Find the post by slug (match against filename stem or relative path)
             let matched = result.posts.into_iter().find(|p| {
-                let stem = p
-                    .path
-                    .file_stem()
-                    .and_then(|s| s.to_str())
-                    .unwrap_or("");
+                let stem = p.path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
                 let path_str = p.path.to_string_lossy();
                 stem == slug || path_str.ends_with(&slug)
             });
@@ -401,15 +401,15 @@ pub fn run(cli: Cli) -> Result<()> {
             });
             let port_str = port.to_string();
             let (program, mut args): (&str, Vec<&str>) = match config.ssg {
-                crate::core::config::SsgType::Hugo => {
-                    ("hugo", vec!["server", "--port", &port_str])
-                }
-                crate::core::config::SsgType::Jekyll => {
-                    ("bundle", vec!["exec", "jekyll", "serve", "--port", &port_str])
-                }
-                crate::core::config::SsgType::Eleventy => {
-                    ("npx", vec!["@11ty/eleventy", "--serve", "--port", &port_str])
-                }
+                crate::core::config::SsgType::Hugo => ("hugo", vec!["server", "--port", &port_str]),
+                crate::core::config::SsgType::Jekyll => (
+                    "bundle",
+                    vec!["exec", "jekyll", "serve", "--port", &port_str],
+                ),
+                crate::core::config::SsgType::Eleventy => (
+                    "npx",
+                    vec!["@11ty/eleventy", "--serve", "--port", &port_str],
+                ),
                 crate::core::config::SsgType::Astro => {
                     ("npx", vec!["astro", "dev", "--port", &port_str])
                 }
@@ -451,9 +451,7 @@ pub fn run(cli: Cli) -> Result<()> {
 
             let (program, mut args): (&str, Vec<&str>) = match config.ssg {
                 crate::core::config::SsgType::Hugo => ("hugo", vec![]),
-                crate::core::config::SsgType::Jekyll => {
-                    ("bundle", vec!["exec", "jekyll", "build"])
-                }
+                crate::core::config::SsgType::Jekyll => ("bundle", vec!["exec", "jekyll", "build"]),
                 crate::core::config::SsgType::Eleventy => ("npx", vec!["@11ty/eleventy"]),
                 crate::core::config::SsgType::Astro => ("npx", vec!["astro", "build"]),
             };
@@ -502,11 +500,8 @@ mod tests {
         fs::create_dir_all(site.path().join("content/posts")).unwrap();
 
         // Configure the site using an isolated config directory (no HOME mutation)
-        crate::core::config::configure_site_to(
-            site.path().to_str().unwrap(),
-            config_dir.path(),
-        )
-        .unwrap();
+        crate::core::config::configure_site_to(site.path().to_str().unwrap(), config_dir.path())
+            .unwrap();
 
         (config_dir, site)
     }
@@ -553,7 +548,10 @@ mod tests {
     fn test_new_fails_without_site_configured() {
         let config_dir = TempDir::new().unwrap();
         let config = load_config(&config_dir);
-        assert!(config.site_path.is_empty(), "Unconfigured site should have empty path");
+        assert!(
+            config.site_path.is_empty(),
+            "Unconfigured site should have empty path"
+        );
     }
 
     #[test]
@@ -629,7 +627,11 @@ mod tests {
 
         // Re-read and verify
         let saved = fs::read_to_string(&post.path).unwrap();
-        assert!(saved.contains("draft: false"), "Post should be published: {}", saved);
+        assert!(
+            saved.contains("draft: false"),
+            "Post should be published: {}",
+            saved
+        );
     }
 
     #[test]
@@ -639,13 +641,10 @@ mod tests {
 
         let config = load_config(&config_dir);
         let result = crate::core::posts::scan_posts(&config).unwrap();
-        let matched = result.posts.into_iter().find(|p| {
-            p.path
-                .file_stem()
-                .and_then(|s| s.to_str())
-                .unwrap_or("")
-                == "nonexistent"
-        });
+        let matched = result
+            .posts
+            .into_iter()
+            .find(|p| p.path.file_stem().and_then(|s| s.to_str()).unwrap_or("") == "nonexistent");
         assert!(matched.is_none(), "Should not find nonexistent slug");
     }
 

@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use std::collections::HashMap;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use super::config::Config;
 
@@ -21,7 +21,9 @@ pub fn list_templates(config: &Config) -> Result<Vec<String>> {
     }
 
     let mut names = Vec::new();
-    for entry in fs::read_dir(&dir).with_context(|| format!("Failed to read templates dir: {}", dir.display()))? {
+    for entry in fs::read_dir(&dir)
+        .with_context(|| format!("Failed to read templates dir: {}", dir.display()))?
+    {
         let entry = entry?;
         let path = entry.path();
         if path.extension().and_then(|s| s.to_str()) == Some("yaml") {
@@ -39,7 +41,10 @@ pub fn list_templates(config: &Config) -> Result<Vec<String>> {
 pub fn load_template(config: &Config, name: &str) -> Result<HashMap<String, serde_json::Value>> {
     let path = templates_dir(config).join(format!("{}.yaml", name));
     if !path.exists() {
-        anyhow::bail!("Template '{}' not found. Run: textorium templates list", name);
+        anyhow::bail!(
+            "Template '{}' not found. Run: textorium templates list",
+            name
+        );
     }
     let content = fs::read_to_string(&path)
         .with_context(|| format!("Failed to read template: {}", path.display()))?;
@@ -111,10 +116,11 @@ pub fn frontmatter_from_template(
         // Apply CLI overrides
         if key.as_str() == "categories" {
             if let Some(cat) = category_override {
-                lines.push(format!(
-                    "categories: [\"{}\"]\n",
-                    cat.replace('"', "\\\"")
-                ).trim_end_matches('\n').to_string());
+                lines.push(
+                    format!("categories: [\"{}\"]\n", cat.replace('"', "\\\""))
+                        .trim_end_matches('\n')
+                        .to_string(),
+                );
                 continue;
             }
         }
@@ -135,9 +141,14 @@ pub fn frontmatter_from_template(
     }
 
     // Add CLI overrides not covered by template
-    if category_override.is_some() && !template_fields.contains_key("categories") {
-        let cat = category_override.unwrap();
-        lines.push(format!("categories: [\"{}\"]\n", cat.replace('"', "\\\"")).trim_end_matches('\n').to_string());
+    if let Some(cat) = category_override {
+        if !template_fields.contains_key("categories") {
+            lines.push(
+                format!("categories: [\"{}\"]\n", cat.replace('"', "\\\""))
+                    .trim_end_matches('\n')
+                    .to_string(),
+            );
+        }
     }
     if let Some(tags) = tags_override {
         if !tags.is_empty() && !template_fields.contains_key("tags") {
@@ -202,9 +213,7 @@ fn yaml_value_to_json(value: serde_yaml::Value) -> serde_json::Value {
         serde_yaml::Value::Mapping(map) => {
             let obj: serde_json::Map<String, serde_json::Value> = map
                 .into_iter()
-                .filter_map(|(k, v)| {
-                    k.as_str().map(|ks| (ks.to_string(), yaml_value_to_json(v)))
-                })
+                .filter_map(|(k, v)| k.as_str().map(|ks| (ks.to_string(), yaml_value_to_json(v))))
                 .collect();
             serde_json::Value::Object(obj)
         }
