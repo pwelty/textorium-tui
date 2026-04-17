@@ -467,10 +467,11 @@ impl App {
                             }
                             saved += 1;
                         }
-                        Err(e) => {
-                            if first_error.is_none() {
-                                first_error = Some(format!("{}", e));
-                            }
+                        Err(e) if first_error.is_none() => {
+                            first_error = Some(format!("{}", e));
+                            errors += 1;
+                        }
+                        Err(_) => {
                             errors += 1;
                         }
                     }
@@ -587,13 +588,14 @@ impl App {
                         post.sync_fields_from_frontmatter();
                         modified_paths.push(path.clone());
                     }
-                    BatchOp::RemoveField { key } => {
-                        if post.frontmatter.contains_key(key) && key != "title" {
-                            post.frontmatter.remove(key);
-                            post.sync_fields_from_frontmatter();
-                            modified_paths.push(path.clone());
-                        }
+                    BatchOp::RemoveField { key }
+                        if post.frontmatter.contains_key(key) && key != "title" =>
+                    {
+                        post.frontmatter.remove(key);
+                        post.sync_fields_from_frontmatter();
+                        modified_paths.push(path.clone());
                     }
+                    BatchOp::RemoveField { .. } => {} // field absent or protected
                     BatchOp::ToggleDraft => {
                         let new_draft = !post.draft;
                         post.frontmatter
@@ -618,10 +620,11 @@ impl App {
                         }
                         saved += 1;
                     }
-                    Err(e) => {
-                        if first_error.is_none() {
-                            first_error = Some(format!("{}", e));
-                        }
+                    Err(e) if first_error.is_none() => {
+                        first_error = Some(format!("{}", e));
+                        errors += 1;
+                    }
+                    Err(_) => {
                         errors += 1;
                     }
                 }
@@ -1861,62 +1864,55 @@ pub fn run() -> Result<()> {
                     }
                     KeyCode::Enter => {
                         match app.batch_input_step {
-                            BatchInputStep::Key => {
-                                if !app.batch_input_buffer.is_empty() {
-                                    app.batch_input_field =
-                                        std::mem::take(&mut app.batch_input_buffer);
-                                    // Determine if we need a value step
-                                    match app.batch_menu_idx {
-                                        0 | 1 => {
-                                            // AddField or SetValue — need value step
-                                            app.batch_input_step = BatchInputStep::Value;
-                                            app.batch_input_prompt =
-                                                format!("Value for '{}':", app.batch_input_field);
-                                        }
-                                        2 => {
-                                            // RemoveField — field name is enough
-                                            let key = app.batch_input_field.clone();
-                                            let n = app.selected_posts.len();
-                                            app.batch_input_mode = false;
-                                            app.batch_confirm_mode = true;
-                                            app.batch_confirm_prompt = format!(
-                                                "Remove field '{}' from {} post(s)?",
-                                                key, n
-                                            );
-                                            app.pending_batch_op =
-                                                Some(BatchOp::RemoveField { key });
-                                        }
-                                        _ => {}
+                            BatchInputStep::Key if !app.batch_input_buffer.is_empty() => {
+                                app.batch_input_field = std::mem::take(&mut app.batch_input_buffer);
+                                // Determine if we need a value step
+                                match app.batch_menu_idx {
+                                    0 | 1 => {
+                                        // AddField or SetValue — need value step
+                                        app.batch_input_step = BatchInputStep::Value;
+                                        app.batch_input_prompt =
+                                            format!("Value for '{}':", app.batch_input_field);
+                                    }
+                                    2 => {
+                                        // RemoveField — field name is enough
+                                        let key = app.batch_input_field.clone();
+                                        let n = app.selected_posts.len();
+                                        app.batch_input_mode = false;
+                                        app.batch_confirm_mode = true;
+                                        app.batch_confirm_prompt =
+                                            format!("Remove field '{}' from {} post(s)?", key, n);
+                                        app.pending_batch_op = Some(BatchOp::RemoveField { key });
+                                    }
+                                    _ => {}
+                                }
+                            }
+                            BatchInputStep::Value if !app.batch_input_buffer.is_empty() => {
+                                let key = app.batch_input_field.clone();
+                                let value = std::mem::take(&mut app.batch_input_buffer);
+                                let n = app.selected_posts.len();
+                                app.batch_input_mode = false;
+                                app.batch_confirm_mode = true;
+                                match app.batch_menu_idx {
+                                    0 => {
+                                        app.batch_confirm_prompt = format!(
+                                            "Add field '{}' = '{}' to {} post(s)?",
+                                            key, value, n
+                                        );
+                                        app.pending_batch_op =
+                                            Some(BatchOp::AddField { key, value });
+                                    }
+                                    _ => {
+                                        app.batch_confirm_prompt = format!(
+                                            "Set '{}' to '{}' on {} post(s)?",
+                                            key, value, n
+                                        );
+                                        app.pending_batch_op =
+                                            Some(BatchOp::SetValue { key, value });
                                     }
                                 }
                             }
-                            BatchInputStep::Value => {
-                                if !app.batch_input_buffer.is_empty() {
-                                    let key = app.batch_input_field.clone();
-                                    let value = std::mem::take(&mut app.batch_input_buffer);
-                                    let n = app.selected_posts.len();
-                                    app.batch_input_mode = false;
-                                    app.batch_confirm_mode = true;
-                                    match app.batch_menu_idx {
-                                        0 => {
-                                            app.batch_confirm_prompt = format!(
-                                                "Add field '{}' = '{}' to {} post(s)?",
-                                                key, value, n
-                                            );
-                                            app.pending_batch_op =
-                                                Some(BatchOp::AddField { key, value });
-                                        }
-                                        _ => {
-                                            app.batch_confirm_prompt = format!(
-                                                "Set '{}' to '{}' on {} post(s)?",
-                                                key, value, n
-                                            );
-                                            app.pending_batch_op =
-                                                Some(BatchOp::SetValue { key, value });
-                                        }
-                                    }
-                                }
-                            }
+                            _ => {} // buffer empty — do nothing
                         }
                     }
                     KeyCode::Esc => {
@@ -2159,17 +2155,13 @@ pub fn run() -> Result<()> {
                     KeyCode::Char('k') | KeyCode::Up => {
                         match app.focused_pane {
                             0 => app.select_prev(), // Posts pane
-                            1 => {
+                            1 if app.metadata_selected > 0 => {
                                 // Metadata pane - navigate fields
-                                if app.metadata_selected > 0 {
-                                    app.metadata_selected -= 1;
-                                }
+                                app.metadata_selected -= 1;
                             }
-                            2 => {
+                            2 if app.content_scroll > 0 => {
                                 // Content pane - scroll up
-                                if app.content_scroll > 0 {
-                                    app.content_scroll -= 1;
-                                }
+                                app.content_scroll -= 1;
                             }
                             _ => {}
                         }
@@ -2333,15 +2325,13 @@ pub fn run() -> Result<()> {
                         app.filter_builder_op = None;
                         app.filter_builder_op_idx = 0;
                     }
-                    KeyCode::Char('x') => {
+                    KeyCode::Char('x') if !app.property_filters.is_empty() => {
                         // Clear all property filters
-                        if !app.property_filters.is_empty() {
-                            let n = app.property_filters.len();
-                            app.property_filters.clear();
-                            app.invalidate_filter();
-                            app.set_selected(0);
-                            app.status_message = format!("✓ Cleared {} filter(s)", n);
-                        }
+                        let n = app.property_filters.len();
+                        app.property_filters.clear();
+                        app.invalidate_filter();
+                        app.set_selected(0);
+                        app.status_message = format!("✓ Cleared {} filter(s)", n);
                     }
                     KeyCode::Char('S') => {
                         // Open site picker
@@ -2375,16 +2365,14 @@ pub fn run() -> Result<()> {
                     KeyCode::Char('Q') => {
                         app.apply_smartquotes();
                     }
-                    KeyCode::Char(' ') => {
+                    KeyCode::Char(' ') if app.focused_pane == 0 => {
                         // Toggle selection of current post in posts pane
-                        if app.focused_pane == 0 {
-                            if let Some(&idx) = app.filtered_indices.get(app.selected) {
-                                let path = app.posts[idx].path.clone();
-                                if app.selected_posts.contains(&path) {
-                                    app.selected_posts.remove(&path);
-                                } else {
-                                    app.selected_posts.insert(path);
-                                }
+                        if let Some(&idx) = app.filtered_indices.get(app.selected) {
+                            let path = app.posts[idx].path.clone();
+                            if app.selected_posts.contains(&path) {
+                                app.selected_posts.remove(&path);
+                            } else {
+                                app.selected_posts.insert(path);
                             }
                         }
                     }
@@ -2428,14 +2416,12 @@ pub fn run() -> Result<()> {
                         app.set_selected(0);
                         app.status_message = "Search mode: type to filter posts".to_string();
                     }
-                    KeyCode::Esc => {
+                    KeyCode::Esc if !app.search_query.is_empty() => {
                         // Clear search if active
-                        if !app.search_query.is_empty() {
-                            app.search_query.clear();
-                            app.invalidate_filter();
-                            app.set_selected(0);
-                            app.status_message = "Search cleared".to_string();
-                        }
+                        app.search_query.clear();
+                        app.invalidate_filter();
+                        app.set_selected(0);
+                        app.status_message = "Search cleared".to_string();
                     }
                     _ => {}
                 }
