@@ -67,6 +67,46 @@ pub struct App {
     filter_builder_op: Option<FilterOp>,    // Operator being built
     filter_builder_value: String,           // Value input buffer
     filter_builder_op_idx: usize,           // Currently selected op in list
+    // Batch frontmatter state
+    selected_posts: std::collections::HashSet<std::path::PathBuf>, // Selected post paths
+    show_batch_menu: bool,           // Whether batch ops menu is open
+    batch_menu_idx: usize,           // Currently highlighted batch op
+    batch_confirm_mode: bool,        // Whether we're in the confirmation prompt
+    batch_confirm_prompt: String,    // The confirmation message
+    pending_batch_op: Option<BatchOp>, // Batch op waiting for confirmation
+    batch_revert_paths: Vec<std::path::PathBuf>, // Paths modified by last batch op (for undo)
+    batch_snapshots: std::collections::HashMap<std::path::PathBuf, (std::collections::HashMap<String, serde_json::Value>, String)>, // pre-batch snapshots: path → (frontmatter, raw)
+    batch_input_mode: bool,          // True when collecting extra input for batch op
+    batch_input_prompt: String,      // Prompt for batch input
+    batch_input_buffer: String,      // Input buffer for batch op arguments
+    batch_input_field: String,       // Field name for batch op (set value / add field / remove)
+    batch_input_step: BatchInputStep,// Step within multi-step batch input
+}
+
+/// Available batch frontmatter operations
+#[derive(Debug, Clone, PartialEq)]
+enum BatchOp {
+    AddField { key: String, value: String },
+    SetValue { key: String, value: String },
+    RemoveField { key: String },
+    ToggleDraft,
+}
+
+impl BatchOp {
+    fn description(&self) -> String {
+        match self {
+            BatchOp::AddField { key, value } => format!("add field '{}' = '{}'", key, value),
+            BatchOp::SetValue { key, value } => format!("set '{}' to '{}'", key, value),
+            BatchOp::RemoveField { key } => format!("remove field '{}'", key),
+            BatchOp::ToggleDraft => "toggle draft".to_string(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum BatchInputStep {
+    Key,
+    Value,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -149,6 +189,19 @@ impl App {
             filter_builder_op: None,
             filter_builder_value: String::new(),
             filter_builder_op_idx: 0,
+            selected_posts: std::collections::HashSet::new(),
+            show_batch_menu: false,
+            batch_menu_idx: 0,
+            batch_confirm_mode: false,
+            batch_confirm_prompt: String::new(),
+            pending_batch_op: None,
+            batch_revert_paths: Vec::new(),
+            batch_snapshots: std::collections::HashMap::new(),
+            batch_input_mode: false,
+            batch_input_prompt: String::new(),
+            batch_input_buffer: String::new(),
+            batch_input_field: String::new(),
+            batch_input_step: BatchInputStep::Key,
         })
     }
 
@@ -491,6 +544,140 @@ impl App {
         }
     }
 
+    /// Apply a batch operation to all selected posts.
+    fn apply_batch_op(&mut self, op: &BatchOp) {
+        let selected_paths: Vec<std::path::PathBuf> = self.selected_posts.iter().cloned().collect();
+        let mut modified_paths = Vec::new();
+        let mut errors = 0usize;
+        let mut first_error: Option<String> = None;
+
+        // Take snapshots before modifying
+        let mut snapshots = std::collections::HashMap::new();
+        for path in &selected_paths {
+            if let Some(post) = self.posts.iter().find(|p| &p.path == path) {
+                snapshots.insert(path.clone(), (post.frontmatter.clone(), post.raw_frontmatter.clone()));
+            }
+        }
+
+        for path in &selected_paths {
+            if let Some(post) = self.posts.iter_mut().find(|p| &p.path == path) {
+                match op {
+                    BatchOp::AddField { key, value } => {
+                        // Only add if not already present
+                        if !post.frontmatter.contains_key(key) {
+                            post.frontmatter.insert(
+                                key.clone(),
+                                serde_json::Value::String(value.clone()),
+                            );
+                            post.sync_fields_from_frontmatter();
+                            modified_paths.push(path.clone());
+                        }
+                    }
+                    BatchOp::SetValue { key, value } => {
+                        post.frontmatter.insert(
+                            key.clone(),
+                            serde_json::Value::String(value.clone()),
+                        );
+                        post.sync_fields_from_frontmatter();
+                        modified_paths.push(path.clone());
+                    }
+                    BatchOp::RemoveField { key } => {
+                        if post.frontmatter.contains_key(key) && key != "title" {
+                            post.frontmatter.remove(key);
+                            post.sync_fields_from_frontmatter();
+                            modified_paths.push(path.clone());
+                        }
+                    }
+                    BatchOp::ToggleDraft => {
+                        let new_draft = !post.draft;
+                        post.frontmatter.insert(
+                            "draft".to_string(),
+                            serde_json::Value::Bool(new_draft),
+                        );
+                        post.sync_fields_from_frontmatter();
+                        modified_paths.push(path.clone());
+                    }
+                }
+            }
+        }
+
+        // Save all modified posts
+        let mut saved = 0usize;
+        for path in &modified_paths {
+            if let Some(post) = self.posts.iter_mut().find(|p| &p.path == path) {
+                match save_post(post) {
+                    Ok(_) => {
+                        if let Ok(reloaded) = read_post(&post.path) {
+                            post.original_frontmatter = reloaded.original_frontmatter;
+                            post.original_content = reloaded.original_content;
+                            post.raw_frontmatter = reloaded.raw_frontmatter;
+                        }
+                        saved += 1;
+                    }
+                    Err(e) => {
+                        if first_error.is_none() {
+                            first_error = Some(format!("{}", e));
+                        }
+                        errors += 1;
+                    }
+                }
+            }
+        }
+
+        self.batch_revert_paths = modified_paths;
+        self.batch_snapshots = snapshots;
+        self.invalidate_filter();
+
+        if errors > 0 {
+            let err = first_error.as_deref().unwrap_or("unknown");
+            self.status_message = format!(
+                "Batch: {} saved, {} errors (first: {})",
+                saved, errors, err
+            );
+        } else {
+            self.status_message = format!(
+                "✓ Batch: {} modified (u to revert)",
+                saved
+            );
+        }
+        self.selected_posts.clear();
+    }
+
+    /// Revert all posts modified by the last batch operation.
+    fn revert_batch(&mut self) {
+        if self.batch_revert_paths.is_empty() {
+            self.status_message = "No batch operation to revert".to_string();
+            return;
+        }
+
+        let paths = std::mem::take(&mut self.batch_revert_paths);
+        let snapshots = std::mem::take(&mut self.batch_snapshots);
+        let mut reverted = 0usize;
+
+        for path in &paths {
+            if let Some(post) = self.posts.iter_mut().find(|p| &p.path == path) {
+                if let Some((snap_fm, snap_raw)) = snapshots.get(path) {
+                    post.frontmatter = snap_fm.clone();
+                    post.raw_frontmatter = snap_raw.clone();
+                    post.sync_fields_from_frontmatter();
+                    // Save reverted state to disk
+                    if save_post(post).is_ok() {
+                        // Reload to sync originals
+                        if let Ok(reloaded) = read_post(&post.path) {
+                            post.original_frontmatter = reloaded.original_frontmatter;
+                            post.original_content = reloaded.original_content;
+                            post.raw_frontmatter = reloaded.raw_frontmatter;
+                        }
+                        reverted += 1;
+                    }
+                }
+            }
+        }
+
+        self.invalidate_filter();
+        self.status_message = format!("✓ Reverted {} batch-modified post(s)", reverted);
+    }
+
     /// Create a new post with optional template and reload the posts list.
     fn create_new_post(&mut self, title: &str, template_name: Option<&str>) {
         let template_fields = template_name.and_then(|name| {
@@ -598,18 +785,23 @@ fn ui(f: &mut Frame, app: &mut App) {
                     &post.content_type
                 };
 
-                let title_display = if App::is_dirty(post) {
-                    format!("{} *", post.title)
-                } else {
-                    post.title.clone()
-                };
+                let is_selected = app.selected_posts.contains(&post.path);
+                let sel_marker = if is_selected { "✓ " } else { "  " };
+                let dirty_marker = if App::is_dirty(post) { " *" } else { "" };
+                let title_display = format!("{}{}{}", sel_marker, post.title, dirty_marker);
 
-                Row::new(vec![
+                let row = Row::new(vec![
                     Cell::from(title_display),
                     Cell::from(date),
                     Cell::from(content_type.to_string()),
                     Cell::from(status.to_string()),
-                ])
+                ]);
+
+                if is_selected {
+                    row.style(Style::default().fg(Color::Cyan))
+                } else {
+                    row
+                }
             })
             .collect();
 
@@ -867,10 +1059,16 @@ fn ui(f: &mut Frame, app: &mut App) {
         String::new()
     };
 
+    let selection_suffix = if !app.selected_posts.is_empty() {
+        format!(" | {} selected (b: batch ops, Ctrl+A: all, Space: toggle)", app.selected_posts.len())
+    } else {
+        String::new()
+    };
+
     let status_text = if app.quit_pending {
         "Unsaved changes. Press q again to quit, or Ctrl+S to save.".to_string()
     } else if !app.status_message.is_empty() {
-        format!("{}{}", app.status_message, dirty_suffix)
+        format!("{}{}{}", app.status_message, dirty_suffix, selection_suffix)
     } else if app.search_mode {
         format!(
             "Search mode - Type to filter | Enter/Esc: exit search | {} matches",
@@ -883,9 +1081,9 @@ fn ui(f: &mut Frame, app: &mut App) {
             let filter_hint = if !app.property_filters.is_empty() {
                 format!(" | F: add filter | x: clear filters ({})", app.property_filters.len())
             } else {
-                " | F: property filter".to_string()
+                " | F: filter".to_string()
             };
-            format!("q: quit | j/k: navigate | Tab/h/l: panes | Ctrl+S: save | n: new | s: sort | f: drafts | /: search | o: preview | ?:help{}{}", dirty_suffix, filter_hint)
+            format!("q: quit | j/k/↑↓: nav | Tab: panes | Ctrl+S: save | n:new | s:sort | f:drafts | /:search | b:batch | o:prev | ?:help{}{}{}", dirty_suffix, filter_hint, selection_suffix)
         }
     };
     let status_bar = Paragraph::new(status_text).style(Style::default().fg(Color::Gray));
@@ -969,6 +1167,120 @@ fn ui(f: &mut Frame, app: &mut App) {
             .title(" Choose template ")
             .borders(Borders::ALL)
             .border_style(Style::default().fg(Color::Green));
+
+        let para = Paragraph::new(items).block(block);
+        f.render_widget(Clear, overlay_area);
+        f.render_widget(para, overlay_area);
+    }
+
+    // Batch ops menu overlay
+    if app.show_batch_menu {
+        let area = f.area();
+        let overlay_width = 60u16.min(area.width.saturating_sub(4));
+        let overlay_height = 10u16.min(area.height.saturating_sub(4));
+        let x = (area.width.saturating_sub(overlay_width)) / 2;
+        let y = (area.height.saturating_sub(overlay_height)) / 2;
+        let overlay_area = ratatui::layout::Rect::new(x, y, overlay_width, overlay_height);
+
+        let batch_ops = ["Add field", "Set value", "Remove field", "Toggle draft"];
+
+        let mut items: Vec<Line> = Vec::new();
+        items.push(Line::from(Span::styled(
+            format!("  {} post(s) selected", app.selected_posts.len()),
+            Style::default().fg(Color::Cyan),
+        )));
+        items.push(Line::from(""));
+        for (i, op) in batch_ops.iter().enumerate() {
+            let selected = i == app.batch_menu_idx;
+            let marker = if selected { "► " } else { "  " };
+            items.push(Line::from(vec![
+                Span::raw(marker),
+                Span::styled(op.to_string(), Style::default().fg(
+                    if selected { Color::Yellow } else { Color::Reset }
+                )),
+            ]));
+        }
+        items.push(Line::from(""));
+        items.push(Line::from(Span::styled(
+            "  j/k: navigate   Enter: select   Esc: cancel",
+            Style::default().fg(Color::DarkGray),
+        )));
+
+        let block = Block::default()
+            .title(" Batch operations ")
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::Yellow));
+
+        let para = Paragraph::new(items).block(block);
+        f.render_widget(Clear, overlay_area);
+        f.render_widget(para, overlay_area);
+    }
+
+    // Batch input prompt overlay
+    if app.batch_input_mode {
+        let area = f.area();
+        let overlay_width = 60u16.min(area.width.saturating_sub(4));
+        let overlay_height = 7u16.min(area.height.saturating_sub(4));
+        let x = (area.width.saturating_sub(overlay_width)) / 2;
+        let y = (area.height.saturating_sub(overlay_height)) / 2;
+        let overlay_area = ratatui::layout::Rect::new(x, y, overlay_width, overlay_height);
+
+        let items: Vec<Line> = vec![
+            Line::from(""),
+            Line::from(vec![
+                Span::styled(format!("  {}", app.batch_input_prompt), Style::default().fg(Color::Cyan)),
+            ]),
+            Line::from(""),
+            Line::from(vec![
+                Span::raw("  "),
+                Span::styled(
+                    format!("{}_", app.batch_input_buffer),
+                    Style::default().fg(Color::Yellow),
+                ),
+            ]),
+            Line::from(""),
+            Line::from(Span::styled(
+                "  Enter: confirm   Esc: cancel",
+                Style::default().fg(Color::DarkGray),
+            )),
+        ];
+
+        let block = Block::default()
+            .title(" Batch input ")
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::Yellow));
+
+        let para = Paragraph::new(items).block(block);
+        f.render_widget(Clear, overlay_area);
+        f.render_widget(para, overlay_area);
+    }
+
+    // Batch confirmation overlay
+    if app.batch_confirm_mode {
+        let area = f.area();
+        let overlay_width = 64u16.min(area.width.saturating_sub(4));
+        let overlay_height = 6u16.min(area.height.saturating_sub(4));
+        let x = (area.width.saturating_sub(overlay_width)) / 2;
+        let y = (area.height.saturating_sub(overlay_height)) / 2;
+        let overlay_area = ratatui::layout::Rect::new(x, y, overlay_width, overlay_height);
+
+        let items: Vec<Line> = vec![
+            Line::from(""),
+            Line::from(Span::styled(
+                format!("  {}", app.batch_confirm_prompt),
+                Style::default().fg(Color::Yellow),
+            )),
+            Line::from(""),
+            Line::from(Span::styled(
+                "  y: apply   n/Esc: cancel",
+                Style::default().fg(Color::DarkGray),
+            )),
+        ];
+
+        let block = Block::default()
+            .title(" Confirm batch operation ")
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::Red));
 
         let para = Paragraph::new(items).block(block);
         f.render_widget(Clear, overlay_area);
@@ -1460,6 +1772,148 @@ pub fn run() -> Result<()> {
                 continue;
             }
 
+            // Batch confirmation mode
+            if app.batch_confirm_mode {
+                match key.code {
+                    KeyCode::Char('y') => {
+                        app.batch_confirm_mode = false;
+                        if let Some(op) = app.pending_batch_op.take() {
+                            app.apply_batch_op(&op);
+                        }
+                    }
+                    KeyCode::Char('n') | KeyCode::Esc => {
+                        app.batch_confirm_mode = false;
+                        app.pending_batch_op = None;
+                        app.status_message = "Batch operation cancelled".to_string();
+                    }
+                    _ => {}
+                }
+                continue;
+            }
+
+            // Batch input mode (collecting field key or value)
+            if app.batch_input_mode {
+                match key.code {
+                    KeyCode::Char(c) => {
+                        app.batch_input_buffer.push(c);
+                    }
+                    KeyCode::Backspace => {
+                        app.batch_input_buffer.pop();
+                    }
+                    KeyCode::Enter => {
+                        match app.batch_input_step {
+                            BatchInputStep::Key => {
+                                if !app.batch_input_buffer.is_empty() {
+                                    app.batch_input_field = std::mem::take(&mut app.batch_input_buffer);
+                                    // Determine if we need a value step
+                                    match app.batch_menu_idx {
+                                        0 | 1 => {
+                                            // AddField or SetValue — need value step
+                                            app.batch_input_step = BatchInputStep::Value;
+                                            app.batch_input_prompt = format!("Value for '{}':", app.batch_input_field);
+                                        }
+                                        2 => {
+                                            // RemoveField — field name is enough
+                                            let key = app.batch_input_field.clone();
+                                            let n = app.selected_posts.len();
+                                            app.batch_input_mode = false;
+                                            app.batch_confirm_mode = true;
+                                            app.batch_confirm_prompt = format!(
+                                                "Remove field '{}' from {} post(s)?",
+                                                key, n
+                                            );
+                                            app.pending_batch_op = Some(BatchOp::RemoveField { key });
+                                        }
+                                        _ => {}
+                                    }
+                                }
+                            }
+                            BatchInputStep::Value => {
+                                if !app.batch_input_buffer.is_empty() {
+                                    let key = app.batch_input_field.clone();
+                                    let value = std::mem::take(&mut app.batch_input_buffer);
+                                    let n = app.selected_posts.len();
+                                    app.batch_input_mode = false;
+                                    app.batch_confirm_mode = true;
+                                    match app.batch_menu_idx {
+                                        0 => {
+                                            app.batch_confirm_prompt = format!(
+                                                "Add field '{}' = '{}' to {} post(s)?",
+                                                key, value, n
+                                            );
+                                            app.pending_batch_op = Some(BatchOp::AddField { key, value });
+                                        }
+                                        _ => {
+                                            app.batch_confirm_prompt = format!(
+                                                "Set '{}' to '{}' on {} post(s)?",
+                                                key, value, n
+                                            );
+                                            app.pending_batch_op = Some(BatchOp::SetValue { key, value });
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    KeyCode::Esc => {
+                        app.batch_input_mode = false;
+                        app.batch_input_buffer.clear();
+                        app.batch_input_field.clear();
+                        app.batch_input_step = BatchInputStep::Key;
+                        app.status_message = "Batch operation cancelled".to_string();
+                    }
+                    _ => {}
+                }
+                continue;
+            }
+
+            // Batch menu overlay
+            if app.show_batch_menu {
+                let batch_ops_count = 4usize;
+                match key.code {
+                    KeyCode::Char('j') | KeyCode::Down => {
+                        if app.batch_menu_idx < batch_ops_count - 1 {
+                            app.batch_menu_idx += 1;
+                        }
+                    }
+                    KeyCode::Char('k') | KeyCode::Up => {
+                        if app.batch_menu_idx > 0 {
+                            app.batch_menu_idx -= 1;
+                        }
+                    }
+                    KeyCode::Enter => {
+                        app.show_batch_menu = false;
+                        match app.batch_menu_idx {
+                            3 => {
+                                // ToggleDraft — no input needed, go straight to confirm
+                                let n = app.selected_posts.len();
+                                app.batch_confirm_mode = true;
+                                app.batch_confirm_prompt = format!("Toggle draft on {} post(s)?", n);
+                                app.pending_batch_op = Some(BatchOp::ToggleDraft);
+                            }
+                            _ => {
+                                // AddField (0), SetValue (1), RemoveField (2) — need field name
+                                app.batch_input_mode = true;
+                                app.batch_input_step = BatchInputStep::Key;
+                                app.batch_input_buffer.clear();
+                                app.batch_input_field.clear();
+                                app.batch_input_prompt = match app.batch_menu_idx {
+                                    0 => "Field name to add:".to_string(),
+                                    1 => "Field name to set:".to_string(),
+                                    _ => "Field name to remove:".to_string(),
+                                };
+                            }
+                        }
+                    }
+                    KeyCode::Esc => {
+                        app.show_batch_menu = false;
+                        app.status_message = "Batch operation cancelled".to_string();
+                    }
+                    _ => {}
+                }
+                continue;
+            }
+
             // Handle search mode input
             if app.search_mode {
                 match key.code {
@@ -1769,7 +2223,11 @@ pub fn run() -> Result<()> {
                         };
                     }
                     KeyCode::Char('u') => {
-                        app.revert_selected();
+                        if !app.batch_revert_paths.is_empty() {
+                            app.revert_batch();
+                        } else {
+                            app.revert_selected();
+                        }
                     }
                     KeyCode::Char('o') => {
                         // Open current post in browser
@@ -1845,6 +2303,48 @@ pub fn run() -> Result<()> {
                     }
                     KeyCode::Char('Q') => {
                         app.apply_smartquotes();
+                    }
+                    KeyCode::Char(' ') => {
+                        // Toggle selection of current post in posts pane
+                        if app.focused_pane == 0 {
+                            if let Some(&idx) = app.filtered_indices.get(app.selected) {
+                                let path = app.posts[idx].path.clone();
+                                if app.selected_posts.contains(&path) {
+                                    app.selected_posts.remove(&path);
+                                } else {
+                                    app.selected_posts.insert(path);
+                                }
+                            }
+                        }
+                    }
+                    KeyCode::Char('a') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                        // Select all currently filtered posts
+                        let all_paths: Vec<std::path::PathBuf> = app.filtered_indices
+                            .iter()
+                            .map(|&i| app.posts[i].path.clone())
+                            .collect();
+                        let already_all = all_paths.iter().all(|p| app.selected_posts.contains(p));
+                        if already_all {
+                            // Deselect all if all are already selected
+                            for path in &all_paths {
+                                app.selected_posts.remove(path);
+                            }
+                            app.status_message = "Selection cleared".to_string();
+                        } else {
+                            for path in all_paths {
+                                app.selected_posts.insert(path);
+                            }
+                            app.status_message = format!("Selected {} post(s)", app.selected_posts.len());
+                        }
+                    }
+                    KeyCode::Char('b') => {
+                        // Open batch menu (only if selection non-empty)
+                        if app.selected_posts.is_empty() {
+                            app.status_message = "Select posts first (Space: toggle, Ctrl+A: all)".to_string();
+                        } else {
+                            app.show_batch_menu = true;
+                            app.batch_menu_idx = 0;
+                        }
                     }
                     KeyCode::Char('/') => {
                         // Enter search mode
@@ -1957,6 +2457,19 @@ mod tests {
             filter_builder_op: None,
             filter_builder_value: String::new(),
             filter_builder_op_idx: 0,
+            selected_posts: std::collections::HashSet::new(),
+            show_batch_menu: false,
+            batch_menu_idx: 0,
+            batch_confirm_mode: false,
+            batch_confirm_prompt: String::new(),
+            pending_batch_op: None,
+            batch_revert_paths: Vec::new(),
+            batch_snapshots: std::collections::HashMap::new(),
+            batch_input_mode: false,
+            batch_input_prompt: String::new(),
+            batch_input_buffer: String::new(),
+            batch_input_field: String::new(),
+            batch_input_step: BatchInputStep::Key,
         }
     }
 
