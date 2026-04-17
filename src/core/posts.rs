@@ -356,7 +356,7 @@ pub fn scan_posts(config: &Config) -> Result<ScanResult> {
     }
 
     // Sort by date, newest first
-    posts.sort_by(|a, b| b.date.cmp(&a.date));
+    posts.sort_by_key(|b| std::cmp::Reverse(b.date));
 
     Ok(ScanResult { posts, errors })
 }

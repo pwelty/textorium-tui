@@ -1607,18 +1607,16 @@ pub fn run() -> Result<()> {
                     KeyCode::Backspace => {
                         app.new_post_title.pop();
                     }
-                    KeyCode::Enter => {
-                        if !app.new_post_title.is_empty() {
-                            let title = std::mem::take(&mut app.new_post_title);
-                            app.new_post_title_mode = false;
-                            // template_selected: 0 = no template, 1..n = template index
-                            let tmpl = if app.template_selected > 0 {
-                                app.template_names.get(app.template_selected - 1).cloned()
-                            } else {
-                                None
-                            };
-                            app.create_new_post(&title, tmpl.as_deref());
-                        }
+                    KeyCode::Enter if !app.new_post_title.is_empty() => {
+                        let title = std::mem::take(&mut app.new_post_title);
+                        app.new_post_title_mode = false;
+                        // template_selected: 0 = no template, 1..n = template index
+                        let tmpl = if app.template_selected > 0 {
+                            app.template_names.get(app.template_selected - 1).cloned()
+                        } else {
+                            None
+                        };
+                        app.create_new_post(&title, tmpl.as_deref());
                     }
                     KeyCode::Esc => {
                         app.new_post_title_mode = false;
@@ -1646,11 +1644,9 @@ pub fn run() -> Result<()> {
                         KeyCode::Backspace => {
                             app.filter_builder_field.pop();
                         }
-                        KeyCode::Enter => {
-                            if !app.filter_builder_field.is_empty() {
-                                app.filter_builder_step = FilterBuilderStep::Op;
-                                app.filter_builder_op_idx = 0;
-                            }
+                        KeyCode::Enter if !app.filter_builder_field.is_empty() => {
+                            app.filter_builder_step = FilterBuilderStep::Op;
+                            app.filter_builder_op_idx = 0;
                         }
                         KeyCode::Esc => {
                             app.show_filter_builder = false;
@@ -1661,15 +1657,13 @@ pub fn run() -> Result<()> {
                         _ => {}
                     },
                     FilterBuilderStep::Op => match key.code {
-                        KeyCode::Char('j') | KeyCode::Down => {
-                            if app.filter_builder_op_idx < ops.len() - 1 {
-                                app.filter_builder_op_idx += 1;
-                            }
+                        KeyCode::Char('j') | KeyCode::Down
+                            if app.filter_builder_op_idx < ops.len() - 1 =>
+                        {
+                            app.filter_builder_op_idx += 1;
                         }
-                        KeyCode::Char('k') | KeyCode::Up => {
-                            if app.filter_builder_op_idx > 0 {
-                                app.filter_builder_op_idx -= 1;
-                            }
+                        KeyCode::Char('k') | KeyCode::Up if app.filter_builder_op_idx > 0 => {
+                            app.filter_builder_op_idx -= 1;
                         }
                         KeyCode::Enter => {
                             let selected_op = ops[app.filter_builder_op_idx].clone();
@@ -1716,26 +1710,24 @@ pub fn run() -> Result<()> {
                         KeyCode::Backspace => {
                             app.filter_builder_value.pop();
                         }
-                        KeyCode::Enter => {
-                            if !app.filter_builder_value.is_empty() {
-                                if let Some(op) = app.filter_builder_op.take() {
-                                    let filter = PropertyFilter {
-                                        field: app.filter_builder_field.clone(),
-                                        op,
-                                        value: app.filter_builder_value.clone(),
-                                    };
-                                    app.property_filters.push(filter);
-                                    app.show_filter_builder = false;
-                                    app.filter_builder_field.clear();
-                                    app.filter_builder_value.clear();
-                                    app.filter_builder_step = FilterBuilderStep::Field;
-                                    app.invalidate_filter();
-                                    app.set_selected(0);
-                                    app.status_message = format!(
-                                        "✓ Filter added ({} active)",
-                                        app.property_filters.len()
-                                    );
-                                }
+                        KeyCode::Enter if !app.filter_builder_value.is_empty() => {
+                            if let Some(op) = app.filter_builder_op.take() {
+                                let filter = PropertyFilter {
+                                    field: app.filter_builder_field.clone(),
+                                    op,
+                                    value: app.filter_builder_value.clone(),
+                                };
+                                app.property_filters.push(filter);
+                                app.show_filter_builder = false;
+                                app.filter_builder_field.clear();
+                                app.filter_builder_value.clear();
+                                app.filter_builder_step = FilterBuilderStep::Field;
+                                app.invalidate_filter();
+                                app.set_selected(0);
+                                app.status_message = format!(
+                                    "✓ Filter added ({} active)",
+                                    app.property_filters.len()
+                                );
                             }
                         }
                         KeyCode::Esc => {
@@ -1755,15 +1747,13 @@ pub fn run() -> Result<()> {
             if app.show_site_picker {
                 let total = app.site_entries.len();
                 match key.code {
-                    KeyCode::Char('j') | KeyCode::Down => {
-                        if total > 0 && app.site_picker_selected < total - 1 {
-                            app.site_picker_selected += 1;
-                        }
+                    KeyCode::Char('j') | KeyCode::Down
+                        if total > 0 && app.site_picker_selected < total - 1 =>
+                    {
+                        app.site_picker_selected += 1;
                     }
-                    KeyCode::Char('k') | KeyCode::Up => {
-                        if app.site_picker_selected > 0 {
-                            app.site_picker_selected -= 1;
-                        }
+                    KeyCode::Char('k') | KeyCode::Up if app.site_picker_selected > 0 => {
+                        app.site_picker_selected -= 1;
                     }
                     KeyCode::Enter => {
                         if let Some(site) = app.site_entries.get(app.site_picker_selected) {
@@ -1818,15 +1808,11 @@ pub fn run() -> Result<()> {
             if app.show_template_picker {
                 let total = app.template_names.len() + 1; // 0 = no template
                 match key.code {
-                    KeyCode::Char('j') | KeyCode::Down => {
-                        if app.template_selected < total - 1 {
-                            app.template_selected += 1;
-                        }
+                    KeyCode::Char('j') | KeyCode::Down if app.template_selected < total - 1 => {
+                        app.template_selected += 1;
                     }
-                    KeyCode::Char('k') | KeyCode::Up => {
-                        if app.template_selected > 0 {
-                            app.template_selected -= 1;
-                        }
+                    KeyCode::Char('k') | KeyCode::Up if app.template_selected > 0 => {
+                        app.template_selected -= 1;
                     }
                     KeyCode::Enter => {
                         // template_selected is already stored; transition to title prompt
@@ -1949,15 +1935,13 @@ pub fn run() -> Result<()> {
             if app.show_batch_menu {
                 let batch_ops_count = 4usize;
                 match key.code {
-                    KeyCode::Char('j') | KeyCode::Down => {
-                        if app.batch_menu_idx < batch_ops_count - 1 {
-                            app.batch_menu_idx += 1;
-                        }
+                    KeyCode::Char('j') | KeyCode::Down
+                        if app.batch_menu_idx < batch_ops_count - 1 =>
+                    {
+                        app.batch_menu_idx += 1;
                     }
-                    KeyCode::Char('k') | KeyCode::Up => {
-                        if app.batch_menu_idx > 0 {
-                            app.batch_menu_idx -= 1;
-                        }
+                    KeyCode::Char('k') | KeyCode::Up if app.batch_menu_idx > 0 => {
+                        app.batch_menu_idx -= 1;
                     }
                     KeyCode::Enter => {
                         app.show_batch_menu = false;
@@ -2132,19 +2116,21 @@ pub fn run() -> Result<()> {
                         app.quit_pending = true;
                         continue;
                     }
-                    KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                        if app.focused_pane == 0 {
-                            let size = terminal.size()?;
-                            let half_page = (size.height as usize).saturating_sub(4) / 2;
-                            app.page_down(half_page);
-                        }
+                    KeyCode::Char('d')
+                        if key.modifiers.contains(KeyModifiers::CONTROL)
+                            && app.focused_pane == 0 =>
+                    {
+                        let size = terminal.size()?;
+                        let half_page = (size.height as usize).saturating_sub(4) / 2;
+                        app.page_down(half_page);
                     }
-                    KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                        if app.focused_pane == 0 {
-                            let size = terminal.size()?;
-                            let half_page = (size.height as usize).saturating_sub(4) / 2;
-                            app.page_up(half_page);
-                        }
+                    KeyCode::Char('u')
+                        if key.modifiers.contains(KeyModifiers::CONTROL)
+                            && app.focused_pane == 0 =>
+                    {
+                        let size = terminal.size()?;
+                        let half_page = (size.height as usize).saturating_sub(4) / 2;
+                        app.page_up(half_page);
                     }
                     KeyCode::Char('j') | KeyCode::Down => {
                         match app.focused_pane {
