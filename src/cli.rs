@@ -258,6 +258,7 @@ pub fn run(cli: Cli) -> Result<()> {
                 crate::core::config::SsgType::Hugo => 1313,
                 crate::core::config::SsgType::Jekyll => 4000,
                 crate::core::config::SsgType::Eleventy => 8080,
+                crate::core::config::SsgType::Astro => 4321,
             });
             let port_str = port.to_string();
             let (program, mut args): (&str, Vec<&str>) = match config.ssg {
@@ -270,6 +271,9 @@ pub fn run(cli: Cli) -> Result<()> {
                 crate::core::config::SsgType::Eleventy => {
                     ("npx", vec!["@11ty/eleventy", "--serve", "--port", &port_str])
                 }
+                crate::core::config::SsgType::Astro => {
+                    ("npx", vec!["astro", "dev", "--port", &port_str])
+                }
             };
 
             // Include drafts by default; --no-drafts opts out
@@ -278,6 +282,7 @@ pub fn run(cli: Cli) -> Result<()> {
                     crate::core::config::SsgType::Hugo => args.push("-D"),
                     crate::core::config::SsgType::Jekyll => args.push("--drafts"),
                     crate::core::config::SsgType::Eleventy => {}
+                    crate::core::config::SsgType::Astro => {}
                 }
             }
 
@@ -285,6 +290,7 @@ pub fn run(cli: Cli) -> Result<()> {
                 crate::core::config::SsgType::Hugo => "Hugo",
                 crate::core::config::SsgType::Jekyll => "Jekyll",
                 crate::core::config::SsgType::Eleventy => "Eleventy",
+                crate::core::config::SsgType::Astro => "Astro",
             };
             println!("Starting {} dev server on port {}...", ssg_name, port);
 
@@ -310,6 +316,7 @@ pub fn run(cli: Cli) -> Result<()> {
                     ("bundle", vec!["exec", "jekyll", "build"])
                 }
                 crate::core::config::SsgType::Eleventy => ("npx", vec!["@11ty/eleventy"]),
+                crate::core::config::SsgType::Astro => ("npx", vec!["astro", "build"]),
             };
 
             if minify && config.ssg == crate::core::config::SsgType::Hugo {
@@ -320,6 +327,7 @@ pub fn run(cli: Cli) -> Result<()> {
                 crate::core::config::SsgType::Hugo => "Hugo",
                 crate::core::config::SsgType::Jekyll => "Jekyll",
                 crate::core::config::SsgType::Eleventy => "Eleventy",
+                crate::core::config::SsgType::Astro => "Astro",
             };
             println!("Building site with {}...", ssg_name);
 

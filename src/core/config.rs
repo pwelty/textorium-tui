@@ -20,6 +20,7 @@ pub enum SsgType {
     Jekyll,
     #[serde(rename = "11ty")]
     Eleventy,
+    Astro,
 }
 
 impl SsgType {
@@ -29,6 +30,7 @@ impl SsgType {
             SsgType::Hugo => "http://localhost:1313",
             SsgType::Jekyll => "http://localhost:4000",
             SsgType::Eleventy => "http://localhost:8080",
+            SsgType::Astro => "http://localhost:4321",
         }
     }
 }
@@ -144,6 +146,11 @@ fn detect_ssg(path: &str) -> SsgType {
         return SsgType::Eleventy;
     }
 
+    // Astro: has astro.config.mjs or astro.config.ts
+    if path.join("astro.config.mjs").exists() || path.join("astro.config.ts").exists() {
+        return SsgType::Astro;
+    }
+
     // Default to Hugo
     SsgType::Hugo
 }
@@ -164,6 +171,7 @@ fn detect_content_dir(path: &str, ssg: &SsgType) -> String {
                 "posts".to_string() // 11ty common default
             }
         }
+        SsgType::Astro => "src/content".to_string(),
     }
 }
 
@@ -255,6 +263,20 @@ mod tests {
         assert_eq!(detect_ssg(&dir.path().to_string_lossy()), SsgType::Hugo);
     }
 
+    #[test]
+    fn test_detect_ssg_astro_mjs() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("astro.config.mjs"), "").unwrap();
+        assert_eq!(detect_ssg(&dir.path().to_string_lossy()), SsgType::Astro);
+    }
+
+    #[test]
+    fn test_detect_ssg_astro_ts() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("astro.config.ts"), "").unwrap();
+        assert_eq!(detect_ssg(&dir.path().to_string_lossy()), SsgType::Astro);
+    }
+
     // --- detect_content_dir ---
 
     #[test]
@@ -301,6 +323,15 @@ mod tests {
         assert_eq!(
             detect_content_dir(&dir.path().to_string_lossy(), &SsgType::Eleventy),
             "posts"
+        );
+    }
+
+    #[test]
+    fn test_detect_content_dir_astro() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(
+            detect_content_dir(&dir.path().to_string_lossy(), &SsgType::Astro),
+            "src/content"
         );
     }
 
@@ -368,5 +399,6 @@ mod tests {
         assert_eq!(SsgType::Hugo.dev_server_url(), "http://localhost:1313");
         assert_eq!(SsgType::Jekyll.dev_server_url(), "http://localhost:4000");
         assert_eq!(SsgType::Eleventy.dev_server_url(), "http://localhost:8080");
+        assert_eq!(SsgType::Astro.dev_server_url(), "http://localhost:4321");
     }
 }

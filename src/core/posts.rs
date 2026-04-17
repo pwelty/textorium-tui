@@ -619,6 +619,11 @@ pub fn create_post(config: &Config, options: &CreatePostOptions) -> Result<PathB
         }
         SsgType::Jekyll => content_path.join(format!("{}-{}.md", now.format("%Y-%m-%d"), slug)),
         SsgType::Eleventy => content_path.join(format!("{}.md", slug)),
+        SsgType::Astro => {
+            // Astro content collections: src/content/<collection>/<slug>.md
+            let collection = options.category.as_deref().unwrap_or("blog");
+            content_path.join(collection).join(format!("{}.md", slug))
+        }
     };
 
     // Ensure parent directory exists
