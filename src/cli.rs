@@ -31,9 +31,19 @@ pub enum Commands {
         #[arg(short, long)]
         tags: Option<String>,
 
+        /// Template name (from <site>/.textorium/templates/)
+        #[arg(long)]
+        template: Option<String>,
+
         /// Skip opening in editor
         #[arg(long)]
         no_edit: bool,
+    },
+
+    /// Manage post templates
+    Templates {
+        #[command(subcommand)]
+        action: TemplatesAction,
     },
 
     /// List posts
@@ -76,6 +86,17 @@ pub enum Commands {
     },
 }
 
+#[derive(Subcommand)]
+pub enum TemplatesAction {
+    /// List available templates
+    List,
+    /// Create a new template scaffold
+    Create {
+        /// Template name (no extension)
+        name: String,
+    },
+}
+
 pub fn run(cli: Cli) -> Result<()> {
     match cli.command {
         None => {
@@ -90,6 +111,7 @@ pub fn run(cli: Cli) -> Result<()> {
             title,
             category,
             tags,
+            template,
             no_edit,
         }) => {
             let config = crate::core::config::Config::load()?;
@@ -97,12 +119,20 @@ pub fn run(cli: Cli) -> Result<()> {
                 anyhow::bail!("No site configured. Run: textorium use <path>");
             }
 
-            let tag_list = tags.map(|t| t.split(',').map(|s| s.trim().to_string()).collect());
+            let tag_list: Option<Vec<String>> = tags.map(|t| t.split(',').map(|s| s.trim().to_string()).collect());
+
+            // Load template fields if --template was given
+            let template_fields = if let Some(ref tname) = template {
+                Some(crate::core::templates::load_template(&config, tname)?)
+            } else {
+                None
+            };
 
             let options = crate::core::posts::CreatePostOptions {
                 title,
                 category,
                 tags: tag_list,
+                template_fields,
             };
 
             let path = crate::core::posts::create_post(&config, &options)?;
@@ -117,6 +147,33 @@ pub fn run(cli: Cli) -> Result<()> {
                     .arg(&path)
                     .status()
                     .with_context(|| format!("Failed to open editor: {}", editor))?;
+            }
+        }
+        Some(Commands::Templates { action }) => {
+            let config = crate::core::config::Config::load()?;
+            if config.site_path.is_empty() {
+                anyhow::bail!("No site configured. Run: textorium use <path>");
+            }
+            match action {
+                TemplatesAction::List => {
+                    let names = crate::core::templates::list_templates(&config)?;
+                    if names.is_empty() {
+                        println!(
+                            "No templates found. Create one with: textorium templates create <name>"
+                        );
+                    } else {
+                        println!("Available templates:");
+                        for name in &names {
+                            let dir = crate::core::templates::templates_dir(&config);
+                            println!("  {}  ({})", name, dir.join(format!("{}.yaml", name)).display());
+                        }
+                    }
+                }
+                TemplatesAction::Create { name } => {
+                    let path = crate::core::templates::create_template(&config, &name)?;
+                    println!("✓ Created template: {}", path.display());
+                    println!("Edit the file to customize your frontmatter scaffold.");
+                }
             }
         }
         Some(Commands::List {
@@ -396,6 +453,7 @@ mod tests {
             title: "My test post".to_string(),
             category: Some("blog".to_string()),
             tags: Some(vec!["rust".to_string(), "tui".to_string()]),
+            template_fields: None,
         };
 
         let path = crate::core::posts::create_post(&config, &options).unwrap();
@@ -425,6 +483,7 @@ mod tests {
             title: "No category".to_string(),
             category: None,
             tags: None,
+            template_fields: None,
         };
 
         let path = crate::core::posts::create_post(&config, &options).unwrap();

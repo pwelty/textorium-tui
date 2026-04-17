@@ -596,6 +596,8 @@ pub struct CreatePostOptions {
     pub title: String,
     pub category: Option<String>,
     pub tags: Option<Vec<String>>,
+    /// Frontmatter fields from a template, if any
+    pub template_fields: Option<std::collections::HashMap<String, serde_json::Value>>,
 }
 
 /// Create a new post file with YAML frontmatter and return the path
@@ -634,26 +636,37 @@ pub fn create_post(config: &Config, options: &CreatePostOptions) -> Result<PathB
 
     // Build frontmatter
     let date_str = now.format("%Y-%m-%dT%H:%M:%SZ").to_string();
-    let mut frontmatter = format!(
-        "---\ntitle: \"{}\"\ndate: {}\ndraft: true\n",
-        options.title.replace('"', "\\\""),
-        date_str
-    );
 
-    if let Some(cat) = &options.category {
-        let escaped = cat.replace('"', "\\\"");
-        frontmatter.push_str(&format!("categories: [\"{}\"]\n", escaped));
-    }
-
-    if let Some(tags) = &options.tags {
-        let quoted: Vec<String> = tags
-            .iter()
-            .map(|t| format!("\"{}\"", t.replace('"', "\\\"")))
-            .collect();
-        frontmatter.push_str(&format!("tags: [{}]\n", quoted.join(", ")));
-    }
-
-    frontmatter.push_str("---\n");
+    let frontmatter_body = if let Some(ref tmpl_fields) = options.template_fields {
+        // Template-based frontmatter
+        crate::core::templates::frontmatter_from_template(
+            &options.title,
+            &date_str,
+            tmpl_fields,
+            options.category.as_deref(),
+            options.tags.as_deref(),
+        )
+    } else {
+        // Minimal default frontmatter
+        let mut lines = vec![
+            format!("title: \"{}\"", options.title.replace('"', "\\\"")),
+            format!("date: {}", date_str),
+            "draft: true".to_string(),
+        ];
+        if let Some(cat) = &options.category {
+            let escaped = cat.replace('"', "\\\"");
+            lines.push(format!("categories: [\"{}\"]\n", escaped).trim_end_matches('\n').to_string());
+        }
+        if let Some(tags) = &options.tags {
+            let quoted: Vec<String> = tags
+                .iter()
+                .map(|t| format!("\"{}\"", t.replace('"', "\\\"")))
+                .collect();
+            lines.push(format!("tags: [{}]", quoted.join(", ")));
+        }
+        lines.join("\n")
+    };
+    let frontmatter = format!("---\n{}\n---\n", frontmatter_body);
 
     fs::write(&file_path, &frontmatter)
         .with_context(|| format!("Failed to write post: {}", file_path.display()))?;
@@ -912,6 +925,7 @@ mod tests {
             title: "My Test Post".to_string(),
             category: Some("dev".to_string()),
             tags: Some(vec!["rust".to_string(), "tui".to_string()]),
+            template_fields: None,
         };
 
         let path = create_post(&config, &options).unwrap();
@@ -945,6 +959,7 @@ mod tests {
             title: "No Category Post".to_string(),
             category: None,
             tags: None,
+            template_fields: None,
         };
 
         let path = create_post(&config, &options).unwrap();
@@ -971,6 +986,7 @@ mod tests {
             title: "Jekyll Post".to_string(),
             category: None,
             tags: None,
+            template_fields: None,
         };
 
         let path = create_post(&config, &options).unwrap();
@@ -1002,6 +1018,7 @@ mod tests {
             title: "Plain Post".to_string(),
             category: None,
             tags: None,
+            template_fields: None,
         };
 
         let path = create_post(&config, &options).unwrap();
@@ -1027,6 +1044,7 @@ mod tests {
             title: "Evil Post".to_string(),
             category: Some("../../../tmp".to_string()),
             tags: None,
+            template_fields: None,
         };
 
         let result = create_post(&config, &options);
@@ -1054,6 +1072,7 @@ mod tests {
                 "tag with \"quotes\"".to_string(),
                 "normal-tag".to_string(),
             ]),
+            template_fields: None,
         };
 
         let path = create_post(&config, &options).unwrap();

@@ -17,7 +17,8 @@ use std::process::Command;
 
 use crate::core::{
     config::Config,
-    posts::{read_post, save_post, scan_posts, smartquotes, Post, ScanResult},
+    posts::{read_post, save_post, scan_posts, smartquotes, CreatePostOptions, Post, ScanResult},
+    templates,
 };
 
 pub struct App {
@@ -47,6 +48,12 @@ pub struct App {
     cached_visual_lines: usize,   // Cached visual line count for current post at current width
     visual_lines_post_idx: Option<usize>, // Which post index the cached visual lines are for
     visual_lines_width: u16,      // Width used for cached visual lines computation
+    // Template picker overlay state
+    show_template_picker: bool,
+    template_names: Vec<String>,  // Available template names
+    template_selected: usize,     // Currently highlighted template in picker
+    new_post_title_mode: bool,    // True when prompting for new post title
+    new_post_title: String,       // Buffer for new post title input
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -75,6 +82,8 @@ impl App {
         let mut table_state = TableState::default();
         table_state.select(Some(0));
 
+        let template_names = templates::list_templates(&config).unwrap_or_default();
+
         Ok(Self {
             config,
             posts,
@@ -102,6 +111,11 @@ impl App {
             cached_visual_lines: 0,
             visual_lines_post_idx: None,
             visual_lines_width: 0,
+            show_template_picker: false,
+            template_names,
+            template_selected: 0,
+            new_post_title_mode: false,
+            new_post_title: String::new(),
         })
     }
 
@@ -433,6 +447,47 @@ impl App {
                 let title = post.title.clone();
                 self.invalidate_filter();
                 self.status_message = format!("Reverted: {}", title);
+            }
+        }
+    }
+
+    /// Create a new post with optional template and reload the posts list.
+    fn create_new_post(&mut self, title: &str, template_name: Option<&str>) {
+        let template_fields = template_name.and_then(|name| {
+            templates::load_template(&self.config, name).ok()
+        });
+
+        let options = CreatePostOptions {
+            title: title.to_string(),
+            category: None,
+            tags: None,
+            template_fields,
+        };
+
+        match crate::core::posts::create_post(&self.config, &options) {
+            Ok(path) => {
+                // Reload posts list and select the new post
+                match scan_posts(&self.config) {
+                    Ok(result) => {
+                        self.posts = result.posts;
+                        self.invalidate_filter();
+                        self.ensure_filtered();
+                        // Select the newly created post
+                        let pos = self
+                            .filtered_indices
+                            .iter()
+                            .position(|&i| self.posts[i].path == path)
+                            .unwrap_or(0);
+                        self.set_selected(pos);
+                        self.status_message = format!("✓ Created: {}", path.display());
+                    }
+                    Err(e) => {
+                        self.status_message = format!("✗ Reload failed: {}", e);
+                    }
+                }
+            }
+            Err(e) => {
+                self.status_message = format!("✗ Could not create post: {}", e);
             }
         }
     }
@@ -778,10 +833,94 @@ fn ui(f: &mut Frame, app: &mut App) {
     } else if app.focused_pane == 1 {
         format!("q: quit | j/k: navigate | Enter: edit/add | d: delete | u: revert | Ctrl+S: save | Tab: panes | ?: help{}", dirty_suffix)
     } else {
-        format!("q: quit | j/k: navigate | Tab/h/l: panes | Ctrl+S: save | s: sort | f: filter | /: search | o: preview | ?: help{}", dirty_suffix)
+        format!("q: quit | j/k: navigate | Tab/h/l: panes | Ctrl+S: save | n: new | s: sort | f: filter | /: search | o: preview | ?: help{}", dirty_suffix)
     };
     let status_bar = Paragraph::new(status_text).style(Style::default().fg(Color::Gray));
     f.render_widget(status_bar, main_chunks[1]);
+
+    // New post title prompt overlay
+    if app.new_post_title_mode {
+        let area = f.area();
+        let overlay_width = 60u16.min(area.width.saturating_sub(4));
+        let overlay_height = 5u16;
+        let x = (area.width.saturating_sub(overlay_width)) / 2;
+        let y = (area.height.saturating_sub(overlay_height)) / 2;
+        let overlay_area = ratatui::layout::Rect::new(x, y, overlay_width, overlay_height);
+
+        let prompt_text = vec![
+            Line::from(""),
+            Line::from(vec![
+                Span::raw("  Title: "),
+                Span::styled(
+                    format!("{}_", app.new_post_title),
+                    Style::default().fg(Color::Yellow),
+                ),
+            ]),
+            Line::from(""),
+            Line::from(Span::styled(
+                "  Enter: create   Esc: cancel",
+                Style::default().fg(Color::DarkGray),
+            )),
+        ];
+
+        let block = Block::default()
+            .title(" New post — enter title ")
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::Green));
+
+        let para = Paragraph::new(prompt_text).block(block);
+        f.render_widget(Clear, overlay_area);
+        f.render_widget(para, overlay_area);
+    }
+
+    // Template picker overlay
+    if app.show_template_picker {
+        let area = f.area();
+        let item_count = (app.template_names.len() + 2) as u16; // +2: "No template" + padding
+        let overlay_height = (item_count + 4).min(area.height.saturating_sub(4));
+        let overlay_width = 50u16.min(area.width.saturating_sub(4));
+        let x = (area.width.saturating_sub(overlay_width)) / 2;
+        let y = (area.height.saturating_sub(overlay_height)) / 2;
+        let overlay_area = ratatui::layout::Rect::new(x, y, overlay_width, overlay_height);
+
+        // Build items: index 0 = "No template (minimal frontmatter)", then named templates
+        let mut items: Vec<Line> = Vec::new();
+        items.push(Line::from(""));
+
+        let no_tmpl_marker = if app.template_selected == 0 { "► " } else { "  " };
+        items.push(Line::from(vec![
+            Span::raw(no_tmpl_marker),
+            Span::styled("No template (minimal frontmatter)", Style::default().fg(
+                if app.template_selected == 0 { Color::Yellow } else { Color::Reset }
+            )),
+        ]));
+
+        for (i, name) in app.template_names.iter().enumerate() {
+            let idx = i + 1;
+            let marker = if app.template_selected == idx { "► " } else { "  " };
+            items.push(Line::from(vec![
+                Span::raw(marker),
+                Span::styled(name.clone(), Style::default().fg(
+                    if app.template_selected == idx { Color::Yellow } else { Color::Reset }
+                )),
+            ]));
+        }
+
+        items.push(Line::from(""));
+        items.push(Line::from(Span::styled(
+            "  j/k: navigate   Enter: select   Esc: cancel",
+            Style::default().fg(Color::DarkGray),
+        )));
+
+        let block = Block::default()
+            .title(" Choose template ")
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::Green));
+
+        let para = Paragraph::new(items).block(block);
+        f.render_widget(Clear, overlay_area);
+        f.render_widget(para, overlay_area);
+    }
 
     // Help overlay
     if app.show_help {
@@ -805,6 +944,7 @@ fn ui(f: &mut Frame, app: &mut App) {
             Line::from("  f             Toggle drafts-only filter"),
             Line::from("  r             Refresh from disk"),
             Line::from("  o             Open in browser"),
+            Line::from("  n             New post (template picker if templates exist)"),
             Line::from(""),
             Line::from(Span::styled("Posts pane", Style::default().add_modifier(Modifier::BOLD))),
             Line::from("  j / k         Navigate up/down"),
@@ -879,6 +1019,69 @@ pub fn run() -> Result<()> {
             // Clear quit_pending on any non-q key
             if key.code != KeyCode::Char('q') {
                 app.quit_pending = false;
+            }
+
+            // New post title input mode
+            if app.new_post_title_mode {
+                match key.code {
+                    KeyCode::Char(c) => {
+                        app.new_post_title.push(c);
+                    }
+                    KeyCode::Backspace => {
+                        app.new_post_title.pop();
+                    }
+                    KeyCode::Enter => {
+                        if !app.new_post_title.is_empty() {
+                            let title = std::mem::take(&mut app.new_post_title);
+                            app.new_post_title_mode = false;
+                            // template_selected: 0 = no template, 1..n = template index
+                            let tmpl = if app.template_selected > 0 {
+                                app.template_names.get(app.template_selected - 1).cloned()
+                            } else {
+                                None
+                            };
+                            app.create_new_post(&title, tmpl.as_deref());
+                        }
+                    }
+                    KeyCode::Esc => {
+                        app.new_post_title_mode = false;
+                        app.new_post_title.clear();
+                        app.status_message = "New post cancelled".to_string();
+                    }
+                    _ => {}
+                }
+                continue;
+            }
+
+            // Template picker overlay
+            if app.show_template_picker {
+                let total = app.template_names.len() + 1; // 0 = no template
+                match key.code {
+                    KeyCode::Char('j') | KeyCode::Down => {
+                        if app.template_selected < total - 1 {
+                            app.template_selected += 1;
+                        }
+                    }
+                    KeyCode::Char('k') | KeyCode::Up => {
+                        if app.template_selected > 0 {
+                            app.template_selected -= 1;
+                        }
+                    }
+                    KeyCode::Enter => {
+                        // template_selected is already stored; transition to title prompt
+                        app.show_template_picker = false;
+                        app.new_post_title_mode = true;
+                        app.new_post_title.clear();
+                        app.status_message = "Enter title for new post".to_string();
+                    }
+                    KeyCode::Esc => {
+                        app.show_template_picker = false;
+                        app.template_selected = 0;
+                        app.status_message = "New post cancelled".to_string();
+                    }
+                    _ => {}
+                }
+                continue;
             }
 
             // Handle search mode input
@@ -1216,6 +1419,22 @@ pub fn run() -> Result<()> {
                     KeyCode::Char('?') => {
                         app.show_help = true;
                     }
+                    KeyCode::Char('n') => {
+                        // Create new post — prompt for template if any exist
+                        // Refresh template list first (user may have added one)
+                        app.template_names = templates::list_templates(&app.config).unwrap_or_default();
+                        if app.template_names.is_empty() {
+                            // No templates: skip picker, go straight to title prompt
+                            app.template_selected = 0;
+                            app.new_post_title_mode = true;
+                            app.new_post_title.clear();
+                            app.status_message = "Enter title for new post".to_string();
+                        } else {
+                            // Show template picker
+                            app.template_selected = 0;
+                            app.show_template_picker = true;
+                        }
+                    }
                     KeyCode::Char('Q') => {
                         app.apply_smartquotes();
                     }
@@ -1315,6 +1534,11 @@ mod tests {
             cached_visual_lines: 0,
             visual_lines_post_idx: None,
             visual_lines_width: 0,
+            show_template_picker: false,
+            template_names: Vec::new(),
+            template_selected: 0,
+            new_post_title_mode: false,
+            new_post_title: String::new(),
         }
     }
 
