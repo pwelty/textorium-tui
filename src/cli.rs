@@ -62,6 +62,12 @@ pub enum Commands {
         #[arg(short, long)]
         category: Option<String>,
 
+        /// Property filter in field:op:value format (repeatable, AND logic)
+        /// Operators: contains, equals, is_true, is_false
+        /// Example: --filter "draft:is_true" --filter "tags:contains:rust"
+        #[arg(long = "filter", value_name = "FILTER")]
+        filters: Vec<String>,
+
         /// Output as JSON
         #[arg(long)]
         json: bool,
@@ -239,6 +245,7 @@ pub fn run(cli: Cli) -> Result<()> {
         Some(Commands::List {
             drafts,
             category,
+            filters,
             json,
         }) => {
             let config = crate::core::config::Config::load()?;
@@ -261,6 +268,21 @@ pub fn run(cli: Cli) -> Result<()> {
             }
             if let Some(ref cat) = category {
                 posts.retain(|p| p.categories.iter().any(|c| c.eq_ignore_ascii_case(cat)));
+            }
+
+            // Apply property filters
+            if !filters.is_empty() {
+                let parsed_filters: Vec<crate::core::filters::PropertyFilter> = filters
+                    .iter()
+                    .filter_map(|s| {
+                        let f = crate::core::filters::PropertyFilter::parse(s);
+                        if f.is_none() {
+                            eprintln!("Warning: invalid filter '{}' (expected field:op[:value])", s);
+                        }
+                        f
+                    })
+                    .collect();
+                posts.retain(|p| parsed_filters.iter().all(|f| f.matches(p)));
             }
 
             if json {

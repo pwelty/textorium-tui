@@ -1,4 +1,5 @@
 use anyhow::Result;
+use crate::core::filters::{FilterOp, PropertyFilter};
 use crossterm::{
     event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyModifiers},
     execute,
@@ -58,6 +59,21 @@ pub struct App {
     show_site_picker: bool,
     site_entries: Vec<SiteEntry>, // All registered sites for the picker
     site_picker_selected: usize,  // Currently highlighted site in picker
+    // Property filter state
+    property_filters: Vec<PropertyFilter>,  // Active AND filters
+    show_filter_builder: bool,              // Whether filter builder overlay is open
+    filter_builder_step: FilterBuilderStep, // Current step in builder
+    filter_builder_field: String,           // Field name being built
+    filter_builder_op: Option<FilterOp>,    // Operator being built
+    filter_builder_value: String,           // Value input buffer
+    filter_builder_op_idx: usize,           // Currently selected op in list
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum FilterBuilderStep {
+    Field,   // Enter the field name
+    Op,      // Pick the operator
+    Value,   // Enter the value (for contains/equals)
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -126,6 +142,13 @@ impl App {
             show_site_picker: false,
             site_entries,
             site_picker_selected: 0,
+            property_filters: Vec::new(),
+            show_filter_builder: false,
+            filter_builder_step: FilterBuilderStep::Field,
+            filter_builder_field: String::new(),
+            filter_builder_op: None,
+            filter_builder_value: String::new(),
+            filter_builder_op_idx: 0,
         })
     }
 
@@ -202,6 +225,13 @@ impl App {
         // Filter drafts
         if self.drafts_only {
             indices.retain(|&i| self.posts[i].draft);
+        }
+
+        // Property filters (AND logic)
+        if !self.property_filters.is_empty() {
+            indices.retain(|&i| {
+                self.property_filters.iter().all(|f| f.matches(&self.posts[i]))
+            });
         }
 
         // Search
@@ -598,8 +628,14 @@ fn ui(f: &mut Frame, app: &mut App) {
         } else {
             String::new()
         };
+        let prop_filters = if !app.property_filters.is_empty() {
+            let labels: Vec<String> = app.property_filters.iter().map(|f| f.display()).collect();
+            format!(" [FILTER: {}]", labels.join(" AND "))
+        } else {
+            String::new()
+        };
         let count = format!(" ({}/{})", filtered_count, app.posts.len());
-        let posts_title = format!("Posts{}{}{}{}", count, filter, search, focus);
+        let posts_title = format!("Posts{}{}{}{}{}", count, filter, prop_filters, search, focus);
 
         (rows, posts_title, filtered_count, is_empty, empty_message)
     };
@@ -843,7 +879,14 @@ fn ui(f: &mut Frame, app: &mut App) {
     } else if app.focused_pane == 1 {
         format!("q: quit | j/k: navigate | Enter: edit/add | d: delete | u: revert | Ctrl+S: save | Tab: panes | ?: help{}", dirty_suffix)
     } else {
-        format!("q: quit | j/k: navigate | Tab/h/l: panes | Ctrl+S: save | n: new | s: sort | f: filter | /: search | o: preview | ?: help{}", dirty_suffix)
+        {
+            let filter_hint = if !app.property_filters.is_empty() {
+                format!(" | F: add filter | x: clear filters ({})", app.property_filters.len())
+            } else {
+                " | F: property filter".to_string()
+            };
+            format!("q: quit | j/k: navigate | Tab/h/l: panes | Ctrl+S: save | n: new | s: sort | f: drafts | /: search | o: preview | ?:help{}{}", dirty_suffix, filter_hint)
+        }
     };
     let status_bar = Paragraph::new(status_text).style(Style::default().fg(Color::Gray));
     f.render_widget(status_bar, main_chunks[1]);
@@ -932,6 +975,100 @@ fn ui(f: &mut Frame, app: &mut App) {
         f.render_widget(para, overlay_area);
     }
 
+    // Filter builder overlay
+    if app.show_filter_builder {
+        let area = f.area();
+        let overlay_width = 60u16.min(area.width.saturating_sub(4));
+        let overlay_height = 12u16.min(area.height.saturating_sub(4));
+        let x = (area.width.saturating_sub(overlay_width)) / 2;
+        let y = (area.height.saturating_sub(overlay_height)) / 2;
+        let overlay_area = ratatui::layout::Rect::new(x, y, overlay_width, overlay_height);
+
+        let ops = ["contains", "equals", "is_true", "is_false"];
+
+        let mut lines: Vec<Line> = Vec::new();
+        lines.push(Line::from(""));
+
+        match app.filter_builder_step {
+            FilterBuilderStep::Field => {
+                lines.push(Line::from(vec![
+                    Span::raw("  Field name: "),
+                    Span::styled(
+                        format!("{}_", app.filter_builder_field),
+                        Style::default().fg(Color::Yellow),
+                    ),
+                ]));
+                lines.push(Line::from(""));
+                lines.push(Line::from(Span::styled(
+                    "  e.g. draft, content_type, tags, categories",
+                    Style::default().fg(Color::DarkGray),
+                )));
+                lines.push(Line::from(""));
+                lines.push(Line::from(Span::styled(
+                    "  Enter: next step   Esc: cancel",
+                    Style::default().fg(Color::DarkGray),
+                )));
+            }
+            FilterBuilderStep::Op => {
+                lines.push(Line::from(Span::styled(
+                    format!("  Field: {}", app.filter_builder_field),
+                    Style::default().fg(Color::Cyan),
+                )));
+                lines.push(Line::from(""));
+                for (i, op) in ops.iter().enumerate() {
+                    let selected = i == app.filter_builder_op_idx;
+                    let marker = if selected { "► " } else { "  " };
+                    lines.push(Line::from(vec![
+                        Span::raw(marker),
+                        Span::styled(op.to_string(), Style::default().fg(
+                            if selected { Color::Yellow } else { Color::Reset }
+                        )),
+                    ]));
+                }
+                lines.push(Line::from(""));
+                lines.push(Line::from(Span::styled(
+                    "  j/k: navigate   Enter: select   Esc: cancel",
+                    Style::default().fg(Color::DarkGray),
+                )));
+            }
+            FilterBuilderStep::Value => {
+                lines.push(Line::from(Span::styled(
+                    format!("  Field: {}  Op: {}", app.filter_builder_field,
+                        app.filter_builder_op.as_ref().map(|o| o.label()).unwrap_or("")),
+                    Style::default().fg(Color::Cyan),
+                )));
+                lines.push(Line::from(""));
+                lines.push(Line::from(vec![
+                    Span::raw("  Value: "),
+                    Span::styled(
+                        format!("{}_", app.filter_builder_value),
+                        Style::default().fg(Color::Yellow),
+                    ),
+                ]));
+                lines.push(Line::from(""));
+                lines.push(Line::from(Span::styled(
+                    "  Enter: apply filter   Esc: cancel",
+                    Style::default().fg(Color::DarkGray),
+                )));
+            }
+        }
+
+        let title = match app.filter_builder_step {
+            FilterBuilderStep::Field => " Add filter — step 1: field ",
+            FilterBuilderStep::Op => " Add filter — step 2: operator ",
+            FilterBuilderStep::Value => " Add filter — step 3: value ",
+        };
+
+        let block = Block::default()
+            .title(title)
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::Magenta));
+
+        let para = Paragraph::new(lines).block(block);
+        f.render_widget(Clear, overlay_area);
+        f.render_widget(para, overlay_area);
+    }
+
     // Site picker overlay
     if app.show_site_picker {
         let area = f.area();
@@ -1013,6 +1150,8 @@ fn ui(f: &mut Frame, app: &mut App) {
             Line::from("  r             Refresh from disk"),
             Line::from("  o             Open in browser"),
             Line::from("  n             New post (template picker if templates exist)"),
+            Line::from("  F             Add property filter (field:op:value)"),
+            Line::from("  x             Clear all property filters"),
             Line::from("  S             Site picker (switch active site)"),
             Line::from(""),
             Line::from(Span::styled("Posts pane", Style::default().add_modifier(Modifier::BOLD))),
@@ -1118,6 +1257,116 @@ pub fn run() -> Result<()> {
                         app.status_message = "New post cancelled".to_string();
                     }
                     _ => {}
+                }
+                continue;
+            }
+
+            // Filter builder overlay
+            if app.show_filter_builder {
+                let ops = [FilterOp::Contains, FilterOp::Equals, FilterOp::IsTrue, FilterOp::IsFalse];
+                match app.filter_builder_step {
+                    FilterBuilderStep::Field => match key.code {
+                        KeyCode::Char(c) => {
+                            app.filter_builder_field.push(c);
+                        }
+                        KeyCode::Backspace => {
+                            app.filter_builder_field.pop();
+                        }
+                        KeyCode::Enter => {
+                            if !app.filter_builder_field.is_empty() {
+                                app.filter_builder_step = FilterBuilderStep::Op;
+                                app.filter_builder_op_idx = 0;
+                            }
+                        }
+                        KeyCode::Esc => {
+                            app.show_filter_builder = false;
+                            app.filter_builder_field.clear();
+                            app.filter_builder_value.clear();
+                            app.filter_builder_op = None;
+                        }
+                        _ => {}
+                    },
+                    FilterBuilderStep::Op => match key.code {
+                        KeyCode::Char('j') | KeyCode::Down => {
+                            if app.filter_builder_op_idx < ops.len() - 1 {
+                                app.filter_builder_op_idx += 1;
+                            }
+                        }
+                        KeyCode::Char('k') | KeyCode::Up => {
+                            if app.filter_builder_op_idx > 0 {
+                                app.filter_builder_op_idx -= 1;
+                            }
+                        }
+                        KeyCode::Enter => {
+                            let selected_op = ops[app.filter_builder_op_idx].clone();
+                            app.filter_builder_op = Some(selected_op.clone());
+                            match selected_op {
+                                FilterOp::IsTrue | FilterOp::IsFalse => {
+                                    // No value needed — apply immediately
+                                    let filter = PropertyFilter {
+                                        field: app.filter_builder_field.clone(),
+                                        op: selected_op,
+                                        value: String::new(),
+                                    };
+                                    app.property_filters.push(filter);
+                                    app.show_filter_builder = false;
+                                    app.filter_builder_field.clear();
+                                    app.filter_builder_op = None;
+                                    app.filter_builder_step = FilterBuilderStep::Field;
+                                    app.invalidate_filter();
+                                    app.set_selected(0);
+                                    app.status_message = format!("✓ Filter added ({} active)", app.property_filters.len());
+                                }
+                                _ => {
+                                    app.filter_builder_step = FilterBuilderStep::Value;
+                                    app.filter_builder_value.clear();
+                                }
+                            }
+                        }
+                        KeyCode::Esc => {
+                            app.show_filter_builder = false;
+                            app.filter_builder_field.clear();
+                            app.filter_builder_value.clear();
+                            app.filter_builder_op = None;
+                            app.filter_builder_step = FilterBuilderStep::Field;
+                        }
+                        _ => {}
+                    },
+                    FilterBuilderStep::Value => match key.code {
+                        KeyCode::Char(c) => {
+                            app.filter_builder_value.push(c);
+                        }
+                        KeyCode::Backspace => {
+                            app.filter_builder_value.pop();
+                        }
+                        KeyCode::Enter => {
+                            if !app.filter_builder_value.is_empty() {
+                                if let Some(op) = app.filter_builder_op.take() {
+                                    let filter = PropertyFilter {
+                                        field: app.filter_builder_field.clone(),
+                                        op,
+                                        value: app.filter_builder_value.clone(),
+                                    };
+                                    app.property_filters.push(filter);
+                                    app.show_filter_builder = false;
+                                    app.filter_builder_field.clear();
+                                    app.filter_builder_value.clear();
+                                    app.filter_builder_step = FilterBuilderStep::Field;
+                                    app.invalidate_filter();
+                                    app.set_selected(0);
+                                    app.status_message = format!("✓ Filter added ({} active)", app.property_filters.len());
+                                }
+                            }
+                        }
+                        KeyCode::Esc => {
+                            app.show_filter_builder = false;
+                            app.filter_builder_field.clear();
+                            app.filter_builder_value.clear();
+                            app.filter_builder_op = None;
+                            app.filter_builder_step = FilterBuilderStep::Field;
+                        }
+                        _ => {}
+                    },
                 }
                 continue;
             }
@@ -1546,6 +1795,25 @@ pub fn run() -> Result<()> {
                     KeyCode::Char('?') => {
                         app.show_help = true;
                     }
+                    KeyCode::Char('F') => {
+                        // Open filter builder
+                        app.show_filter_builder = true;
+                        app.filter_builder_step = FilterBuilderStep::Field;
+                        app.filter_builder_field.clear();
+                        app.filter_builder_value.clear();
+                        app.filter_builder_op = None;
+                        app.filter_builder_op_idx = 0;
+                    }
+                    KeyCode::Char('x') => {
+                        // Clear all property filters
+                        if !app.property_filters.is_empty() {
+                            let n = app.property_filters.len();
+                            app.property_filters.clear();
+                            app.invalidate_filter();
+                            app.set_selected(0);
+                            app.status_message = format!("✓ Cleared {} filter(s)", n);
+                        }
+                    }
                     KeyCode::Char('S') => {
                         // Open site picker
                         app.site_entries = MultiSiteConfig::load()
@@ -1682,6 +1950,13 @@ mod tests {
             show_site_picker: false,
             site_entries: Vec::new(),
             site_picker_selected: 0,
+            property_filters: Vec::new(),
+            show_filter_builder: false,
+            filter_builder_step: FilterBuilderStep::Field,
+            filter_builder_field: String::new(),
+            filter_builder_op: None,
+            filter_builder_value: String::new(),
+            filter_builder_op_idx: 0,
         }
     }
 
@@ -1818,6 +2093,58 @@ mod tests {
         // select_prev goes back
         app.select_prev();
         assert_eq!(app.selected, 1);
+    }
+
+    #[test]
+    fn test_property_filter_applied_in_ensure_filtered() {
+        use crate::core::filters::{FilterOp, PropertyFilter};
+        let mut posts = sample_posts();
+        // Add content_type to one post
+        posts[0].frontmatter.insert(
+            "content_type".to_string(),
+            serde_json::Value::String("tutorial".to_string()),
+        );
+        posts[0].sync_fields_from_frontmatter();
+
+        let mut app = make_app(posts);
+        app.property_filters.push(PropertyFilter {
+            field: "content_type".to_string(),
+            op: FilterOp::Equals,
+            value: "tutorial".to_string(),
+        });
+        app.invalidate_filter();
+        app.ensure_filtered();
+
+        let filtered = app.get_filtered_posts();
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].content_type, "tutorial");
+    }
+
+    #[test]
+    fn test_property_filter_contains_tag() {
+        use crate::core::filters::{FilterOp, PropertyFilter};
+        let mut posts = sample_posts();
+        // Inject tags into frontmatter (make_post doesn't populate frontmatter HashMap)
+        posts[0].frontmatter.insert(
+            "tags".to_string(),
+            serde_json::Value::Array(vec![serde_json::Value::String("rust".to_string())]),
+        );
+        posts[2].frontmatter.insert(
+            "tags".to_string(),
+            serde_json::Value::Array(vec![serde_json::Value::String("rust".to_string())]),
+        );
+
+        let mut app = make_app(posts);
+        app.property_filters.push(PropertyFilter {
+            field: "tags".to_string(),
+            op: FilterOp::Contains,
+            value: "rust".to_string(),
+        });
+        app.invalidate_filter();
+        app.ensure_filtered();
+
+        // Alpha post (idx 0) and Gamma post (idx 2) have tag "rust"
+        assert_eq!(app.get_filtered_posts().len(), 2);
     }
 
     #[test]
