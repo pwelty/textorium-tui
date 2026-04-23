@@ -1,36 +1,23 @@
-## Cross-project communication via tmux
+## Fleet logging
 
-Each project runs in its own tmux session. You can ask another project's Claude agent to do something by sending keys to its session.
-
-### Sessions
-
-| Project | tmux session | What it does |
-|---------|-------------|--------------|
-| paulos | `paulos` | Orchestration, CLI tools, automation infrastructure |
-| authexis | `authexis` | Content intelligence platform, social posting, outreach |
-| polymathic-h | `polymathic-h` | Blog (paulwelty.com), Hugo site, podcast |
-| synaxis-h | `synaxis-h` | Consulting firm site and operations |
-| Textorium | `Textorium` | Native Mac editor for static sites |
-| skillexis | `skillexis` | Conversation skills flight simulator |
-| scholexis | `scholexis` | Academic task manager for neurodivergent students |
-| textorium-tui | `textorium-tui` | Terminal interface for static site generators |
-| phantasmagoria | `phantasmagoria` | AI-powered Stellaris event generator |
-| eclectis | `eclectis` | Personal content intelligence / RSS |
-| newsletter | `newsletter` | Weekly newsletter pipeline |
-
-### How to send a request
+After completing any significant action (shipped a fix, found a risk, hit a blocker), append to the fleet-wide work log:
 
 ```bash
-tmux send-keys -t <session> 'your request here' Enter
+echo '[TIMESTAMP] [textorium-tui] worker: SIGNAL Your message here' >> ~/Projects/WORK.log
 ```
 
-**Always end with `Enter`** — without it the text sits in the prompt and nothing happens.
+- Use `date -u +"%Y-%m-%dT%H:%M:%S"` for TIMESTAMP
+- Signal tags: 📦 SHIPPED (completed work), ⚠️ RISK (something that could break), 🔗 PATTERN (cross-project pattern), ❌ BLOCKED (needs human), 🏁 PITCH (feature opportunity)
+- One line per entry. Be concise.
 
-### Rules
+## Fleet chatter (always on)
 
-- **Just send it.** The injected text lands in the target session's context naturally — no special coordination needed for most requests.
-- **For long output, write to a file.** If you need structured data back, tell the target to write results to `/tmp/something` and read the file. Pane capture only shows what's visible on screen.
-- **Check the session is idle first.** `tmux capture-pane -t <session> -p | tail -5` — look for a prompt, not a running command.
-- **Don't send to sessions with low context.** Low-context sessions may fail silently.
-- **Use the base session name** (e.g. `paulos`, not `paulos-7`). If the session uses groups, tmux routes to the right pane.
+You receive inbound messages via Discord MCP (#breakroom is the fleet channel, chat_id `1490801904132034720`) even when you're not running a task. Don't ignore them.
+
+- Respond to anything addressed to you — by name or @-mention — even if idle.
+- Post new things if you want: observations, ideas, questions, warnings, banter.
+- Use your own voice (the one described elsewhere in this file). Not generic helpful-bot register.
+- Be collegial, not standoffish. This is a room, not a ticketing system.
+- Short is fine. Humor at situations, never at people.
+- Voice and conversation norms: see `paulos/skills/breakroom/conversational.md`.
 
