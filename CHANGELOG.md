@@ -2,11 +2,28 @@
 
 All notable changes to Textorium TUI are documented here.
 
-## [Unreleased] — v1.0.3
+## [Unreleased]
+
+These changes are in source after the v1.0.2 release, not yet distributed by that release. This section does not assign a new release version.
+
+### Features already implemented in April 2026
+
+- Astro detection, content creation, dev server, and build support (#126)
+- Site-local YAML post templates and CLI management (#127)
+- Multi-site registry, switching, and legacy config migration (#128)
+- Property filters in the TUI and repeatable CLI `--filter` (#129)
+- Batch frontmatter operations with confirmation and batch revert (#130); these currently write immediately
 
 ### Improvements
 
 - **Word-boundary content wrapping** — content pane now wraps at word boundaries instead of mid-word, with trimmed continuation lines for cleaner reading (#110)
+- Atomic post writes, content dirty tracking, and reload of only the externally edited post, preserving other posts' unsaved changes
+
+### Maintenance
+
+- Declare this repository the sole maintained Rust TUI/Homebrew source; map all 15 private July synthetic core tests, port seven missing cases, and strengthen existing no-frontmatter coverage (#131)
+- Reconcile contributor/source-build documentation, remove stale Notion-command claims, and correct the native companion link without pricing claims
+- Record parser replacement as deliberately not transferred and safety/discovery/parity work as deferred in [the migration document](docs/canonical-source-migration.md); no production behavior, dependency, version, or release changes
 
 ## [1.0.2] — 2026-03-28
 
