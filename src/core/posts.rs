@@ -852,6 +852,83 @@ mod tests {
         f
     }
 
+    // Synthetic coverage adapted from Textorium's July core tests; see
+    // docs/canonical-source-migration.md for provenance and the complete mapping.
+    #[test]
+    fn parse_frontmatter_well_formed() {
+        let md = "---\ntitle: Hello\ndraft: true\ntags:\n  - a\n  - b\nweight: 5\n---\n\nBody.";
+        let (fm, body, _, _) = parse_frontmatter(md).unwrap();
+        assert_eq!(fm.get("title").unwrap(), "Hello");
+        assert_eq!(fm.get("draft").unwrap(), &serde_json::json!(true));
+        assert_eq!(fm.get("tags").unwrap(), &serde_json::json!(["a", "b"]));
+        assert_eq!(fm.get("weight").unwrap(), &serde_json::json!(5));
+        assert_eq!(body, "Body.");
+    }
+
+    #[test]
+    fn parse_frontmatter_single_delimiter_is_not_frontmatter() {
+        let md = "---\ntitle: Broken\nno closing fence";
+        let (fm, body, _, _) = parse_frontmatter(md).unwrap();
+        assert!(fm.is_empty());
+        assert_eq!(body, md);
+    }
+
+    #[test]
+    fn parse_frontmatter_empty_body() {
+        let md = "---\ntitle: Only Meta\n---\n";
+        let (fm, body, _, _) = parse_frontmatter(md).unwrap();
+        assert_eq!(fm.get("title").unwrap(), "Only Meta");
+        assert_eq!(body, "");
+    }
+
+    #[test]
+    fn read_post_parses_rfc3339_date() {
+        let f = create_temp_post("---\ntitle: T\ndate: 2026-07-03T09:30:00Z\n---\n\nBody.");
+        let post = read_post(f.path()).unwrap();
+        let expected = DateTime::parse_from_rfc3339("2026-07-03T09:30:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        assert_eq!(post.date.unwrap(), expected);
+    }
+
+    #[test]
+    fn read_post_parses_iso_date() {
+        let f = create_temp_post("---\ntitle: T\ndate: 2026-07-03\n---\n\nBody.");
+        let post = read_post(f.path()).unwrap();
+        let expected = chrono::NaiveDate::from_ymd_opt(2026, 7, 3)
+            .unwrap()
+            .and_hms_opt(0, 0, 0)
+            .unwrap()
+            .and_utc();
+        assert_eq!(post.date.unwrap(), expected);
+    }
+
+    #[test]
+    fn read_post_invalid_date_is_none() {
+        let f = create_temp_post("---\ntitle: T\ndate: not-a-date\n---\n\nBody.");
+        let post = read_post(f.path()).unwrap();
+        assert!(post.date.is_none());
+    }
+
+    #[test]
+    fn save_then_read_roundtrips_without_corruption() {
+        let f = create_temp_post(
+            "---\ntitle: Round Trip\ndate: 2026-07-03\ndraft: true\ntags:\n  - rust\n  - ssg\nweight: 7\n---\n\nOriginal body.\n",
+        );
+        let original = read_post(f.path()).unwrap();
+        save_post(&original).unwrap();
+        let reread = read_post(f.path()).unwrap();
+        assert_eq!(reread.title, "Round Trip");
+        assert!(reread.draft);
+        assert_eq!(reread.tags, vec!["rust".to_string(), "ssg".to_string()]);
+        assert_eq!(reread.date, original.date);
+        assert_eq!(reread.content, original.content);
+        assert_eq!(
+            reread.frontmatter.get("weight").unwrap(),
+            &serde_json::json!(7)
+        );
+    }
+
     #[test]
     fn test_save_unchanged_post_is_byte_identical() {
         let original = "---\ntitle: My post\ndate: 2025-01-15\ndraft: false\ntags: [rust, tui]\ncategories: [dev]\n---\n\nHello world.\n";
@@ -1402,9 +1479,7 @@ mod tests {
         assert_eq!(post.title, "Untitled");
         assert!(post.frontmatter.is_empty());
         assert_eq!(post.format, FrontmatterFormat::Yaml);
-        assert!(post
-            .content
-            .starts_with("Just plain markdown with no frontmatter."));
+        assert_eq!(post.content, content);
     }
 
     #[test]

@@ -1,125 +1,72 @@
 # Textorium TUI
 
-## Operational Memory
+## Canonical source and operational memory
 
-Read this repo's `MEMORY.md` at the start of project work. Also read `/Users/paul/Projects/MEMORY.md` when the task touches fleet-level conventions, dispatch, MCP setup, automation, or cross-project behavior.
+Read [MEMORY.md](MEMORY.md) before project work. This public repository (`pwelty/textorium-tui`) is the sole maintained Rust TUI source used by Homebrew. Build and contribute here; do not replace it with the obsolete private `pwelty/Textorium/tui-rust` implementation. The native SwiftUI app is independent and shares no implementation code.
 
-Private context is not operational memory. Chat history is not operational memory. Tool-specific auto-memory is not shared operational memory. If future agents need a durable fact to work in this repo, write it to `MEMORY.md`.
+[Canonical-source migration](docs/canonical-source-migration.md) records synthetic coverage, provenance, exclusions, and deferred work. Store durable shared project rules in MEMORY.md, not chat or tool-specific auto-memory. Do not record secrets, raw environment values, private prose, transient progress, or test-output dumps.
 
-Before final response, issue close, or handoff, ask: "Did I learn anything durable that future agents need?" If yes, append or update `MEMORY.md` first.
-
-Do not store secrets, API keys, raw `.env` values, transient progress, issue status dumps, test output dumps, speculation, or facts easily derivable from current code.
-
-Fast terminal interface for static site generators (Hugo, Jekyll, Eleventy). Built in Rust with ratatui for instant startup (~15ms) and zero-lag navigation on sites with 600+ posts.
-
-**This is the public, standalone repo.** The macOS GUI app lives in a separate private repo (`pwelty/Textorium`). They share no code — the TUI is pure Rust, the GUI is pure SwiftUI.
-
-**Distribution**: `brew install pwelty/tap/textorium` (Homebrew tap at `pwelty/homebrew-tap`)
+Distribution: `brew install pwelty/tap/textorium` (`pwelty/homebrew-tap`). The published v1.0.2 release is distinct from newer source; package version alone does not establish feature availability.
 
 ## Architecture
 
-```
+```text
 src/
-├── main.rs              # Entry point (11 lines)
-├── cli.rs               # CLI argument parsing + subcommand execution (~340 lines)
+├── main.rs              # Entry point
+├── cli.rs               # Clap parsing and command execution
 ├── core/
-│   ├── mod.rs
-│   ├── config.rs        # Site config, SSG detection (~340 lines)
-│   └── posts.rs         # Markdown parsing, frontmatter, file scanning (~1340 lines)
-└── tui/
-    ├── mod.rs
-    └── app.rs           # Main TUI application, all UI logic (~1250 lines)
+│   ├── config.rs        # JSON site registry, editor preference, SSG detection
+│   ├── posts.rs         # Markdown parsing, scanning, field sync, saves, smart quotes
+│   ├── templates.rs     # Site-local YAML post templates
+│   └── filters.rs       # Property filter parsing and evaluation
+└── tui/app.rs           # Three-pane UI, input, state, batch operations
 ```
 
-~3,300 lines of Rust including ~1,400 lines of tests.
+- No subcommand launches the synchronous ratatui/crossterm TUI.
+- Config is `~/.config/textorium/config.json`; multi-site format supports an active site and editor preference, with legacy flat-config compatibility.
+- Posts on disk are the source of truth; no database or persistent post cache. Ordinary metadata edits are in memory until Ctrl+S; current batch operations write immediately.
+- YAML frontmatter uses `serde_yaml`; TOML uses `toml`. Preserve current dependencies unless separately authorized.
+- SSG marker detection priority: Hugo → Jekyll → Eleventy → Astro; unknown sites default to Hugo. Hugo uses `content`, Jekyll `_posts`, Eleventy `posts`/`src`, Astro `src/content`.
+- Default dev URLs use ports 1313 / 4000 / 8080 / 4321 respectively. Discovery and preview limitations are documented in the migration follow-ups, not repaired by consolidation.
 
-### Key components
+## Current source capabilities
 
-- **`core/config.rs`** — site config in `~/.config/textorium/config.json`. Auto-detects SSG type. Stores site path, type, dev server URL.
-- **`core/posts.rs`** — scans content dirs, parses YAML frontmatter via serde_yaml, extracts title/date/draft/tags/categories. SSG-aware: Hugo scans `content/`, Jekyll scans `_posts/` + `_drafts/`, Eleventy scans everything.
-- **`tui/app.rs`** — three panes (posts table left, metadata top-right, content preview bottom-right). Handles all keyboard input, pane focus, sorting, filtering, search, inline editing, file saving. Largest file, where most feature work happens.
-- **`cli.rs`** — Clap-based CLI: `use`, `new`, `list`, `publish`, `idea`, `serve`, `build`. All implemented.
+Three-pane posts table, metadata editor, and content preview; search across title/content/categories/tags; sorting, draft and property filters; YAML/TOML frontmatter; smart quotes; external editor; per-post revert; save-all; browser preview; templates; site switching; and batch frontmatter operations.
 
-### Data flow
+CLI commands: `use`, `new`, `list`, `publish`, `templates`, `sites`, `serve`, `build`. There is no `idea`/Notion command. April Astro/templates/sites/filters/batch features are already implemented in source, not newly delivered by this migration or included in the March v1.0.2 release.
 
-1. `main.rs` → parses CLI args via `cli.rs`
-2. No subcommand → launches TUI
-3. TUI loads `~/.config/textorium/config.json`
-4. Scans site directory via `posts.rs` (SSG-aware)
-5. Renders three-pane UI via ratatui
-6. User edits → modifies in-memory post data
-7. Ctrl+S → writes back to markdown files
+## Build and verify
 
-## Conventions
-
-- **Error handling**: `anyhow::Result` for app errors, `thiserror` for typed errors
-- **Async**: none — fully synchronous
-- **Serialization**: serde + serde_yaml (frontmatter), toml (config)
-- **TUI**: ratatui 0.29 + crossterm 0.28
-- **Source of truth**: posts on disk. Read on startup, write on Ctrl+S. No database, no cache.
-
-### SSG detection priority
-
-Same as the GUI app: Hugo → Jekyll → Eleventy → full directory scan.
-
-Dev server URLs:
-- Hugo: `http://localhost:1313`
-- Jekyll: `http://localhost:4000`
-- Eleventy: `http://localhost:8080`
-
-## Building
+From an isolated checkout of **this** repository:
 
 ```bash
-cargo build              # Dev
-cargo build --release    # Release (opt-level=3, LTO, single codegen unit, stripped — ~1.5MB)
-cargo install --path .   # Install locally
+cargo fmt -- --check
+cargo clippy --locked -- -D warnings
+cargo test --locked
+cargo build --locked
+cargo build --release --locked
+# Optional local install, only when authorized:
+cargo install --path . --locked
 ```
 
-## Release process
+Use disposable synthetic content for tests. No GUI launch or live-site mutation is needed for consolidation. Read the actual diff and preserve non-test production Rust and Cargo files for a coverage/docs-only change.
 
-1. Bump version in `Cargo.toml`
-2. Commit and push to main
-3. Tag: `git tag vX.Y.Z && git push origin vX.Y.Z`
-4. GitHub Actions builds arm64 + x86_64 macOS binaries
-5. Creates GitHub Release with tarballs
-6. Update SHA256 hashes in `pwelty/homebrew-tap` formula
-7. Users get update via `brew upgrade textorium`
+## Release process (separate authorization)
+
+1. Qualify the intended source and update its version/changelog.
+2. Commit and push the reviewed source.
+3. Push a `vX.Y.Z` tag only with release authority.
+4. GitHub Actions builds arm64/x86_64 macOS binaries, publishes release tarballs, and updates the Homebrew tap hashes.
+5. Users consume the released version via `brew upgrade textorium`.
+
+A source/docs PR is not a release; do not trigger tag/formula/website changes as a consolidation side effect. Skopos owns review/merge and private-source retirement for issue #131.
 
 ## Commit messages
 
-Conventional commits:
-
-```
-Feature: Brief description in sentence case
-Fix: Brief description
-Docs: Brief description
-Refactor: Brief description
-```
-
-## Features
-
-**TUI (default, no subcommand):**
-- Three panes: posts table (left), metadata editor (top-right), content preview (bottom-right)
-- Real-time search (title, content, categories)
-- Inline metadata editing (add, edit, delete fields)
-- Smart quotes conversion (`Q` — curly quotes, em dashes, ellipses)
-- External editor integration (`$EDITOR`)
-- Per-post revert (`u`)
-- Save all unsaved (Ctrl+S)
-- Browser preview (`o`)
-- TOML and YAML frontmatter
-
-**CLI subcommands:**
-- `textorium use <path>` — set active site
-- `textorium new "Title"` — create new post
-- `textorium list` — list posts
-- `textorium publish` — publish draft
-- `textorium idea` — capture to Notion
-- `textorium serve` — start dev server
-- `textorium build` — build site
+Title-cased category prefixes: `Feature:`, `Fix:`, `Docs:`, `Refactor:`, `Chore:` with a brief sentence-case description.
 
 ## Related
 
-- **Textorium macOS app**: native SwiftUI GUI, App Store. Private repo `pwelty/Textorium`.
-- **Homebrew tap**: `pwelty/homebrew-tap`
-- **Website**: textorium.app — Cloudflare Pages
+- [Textorium native app](https://apps.apple.com/us/app/textorium/id6756587260) — independent SwiftUI companion; private repository `pwelty/Textorium`.
+- [Homebrew tap](https://github.com/pwelty/homebrew-tap)
+- [Website](https://textorium.app)
