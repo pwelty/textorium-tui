@@ -40,7 +40,7 @@ Private-repository retirement and its documentation/automation changes belong to
 
 ## Deferred safety and parity work
 
-**Current-source supersession:** the bounded safety/discovery pass tracked in [#133](https://github.com/pwelty/textorium-tui/issues/133) implements the first six items below. See [README file safety](../README.md#file-safety-current-source) for the precise contract and residual concurrency/discovery/preview limits. The original consolidation and July test mapping above remain historical records; saved views and template interoperability remain excluded.
+**Released supersession:** the bounded safety/discovery pass tracked in [#133](https://github.com/pwelty/textorium-tui/issues/133) resolves the first six items below and is included in [TUI v1.1.0](https://github.com/pwelty/textorium-tui/releases/tag/v1.1.0). See [README file safety](../README.md#file-safety-current-source) for the precise contract and residual concurrency/discovery/preview limits. The original consolidation and July test mapping above remain historical records; saved views and template interoperability remain excluded.
 
 The earlier source audit identified follow-ups, not repairs delivered by the original consolidation:
 
@@ -65,4 +65,4 @@ cargo build --locked
 
 Review the complete diff and verify non-test Rust and dependency files against the pinned public base. The imported tests should pass on unchanged production behavior; this is coverage consolidation, not a bug fix. A disposable negative-control mutation can prove the custom-field tests detect dropped flattened metadata, but no such mutation belongs in the published branch.
 
-At consolidation time, the latest published release and Homebrew formula are v1.0.2 (2026-03-28); newer source features are not thereby released. `Cargo.toml` still reports 1.0.2 even when building newer source. No version bump, tag, release, formula mutation, website deployment, GUI launch, or real-site mutation is part of this work. Skopos owns review, merge, private retirement, and any later release decision.
+The original consolidation was coverage/docs-only and did not publish a release. The separately authorized safety/discovery pass and TUI v1.1.0 release are now complete; that release includes the previously undistributed features. Native App Store releases remain independent. Follow [the release handoff](releases.md) for future qualification and Homebrew publication.
