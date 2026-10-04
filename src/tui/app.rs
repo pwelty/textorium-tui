@@ -684,15 +684,19 @@ impl App {
 
         let paths = std::mem::take(&mut self.batch_revert_paths);
         let snapshots = std::mem::take(&mut self.batch_snapshots);
-        let mut reverted = 0usize;
+        let mut restored = 0usize;
+        let mut retained = 0usize;
 
         for path in &paths {
             if let Some(post) = self.posts.iter_mut().find(|p| &p.path == path) {
                 if let Some((before, after)) = snapshots.get(path) {
-                    for key in before.keys().chain(after.keys()) {
-                        if before.get(key) != after.get(key)
-                            && post.frontmatter.get(key) == after.get(key)
-                        {
+                    let keys: std::collections::HashSet<_> =
+                        before.keys().chain(after.keys()).collect();
+                    for key in keys {
+                        if before.get(key) == after.get(key) {
+                            continue;
+                        }
+                        if post.frontmatter.get(key) == after.get(key) {
                             match before.get(key) {
                                 Some(value) => {
                                     post.frontmatter.insert(key.clone(), value.clone());
@@ -701,16 +705,18 @@ impl App {
                                     post.frontmatter.remove(key);
                                 }
                             }
+                            restored += 1;
+                        } else {
+                            retained += 1;
                         }
                     }
                     post.sync_fields_from_frontmatter();
-                    reverted += 1;
                 }
             }
         }
 
         self.invalidate_filter();
-        self.status_message = format!("✓ Undid batch on {} post(s) in memory; later field/body edits retained; Ctrl+S to save", reverted);
+        self.status_message = format!("✓ Batch undo: {} field(s) restored in memory; {} later edit(s) retained; Ctrl+S to save", restored, retained);
     }
 
     /// Create a new post with optional template and reload the posts list.

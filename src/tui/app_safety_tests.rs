@@ -152,5 +152,7 @@ fn safety_undo_preserves_subsequent_change_to_same_batch_field() {
     app.posts[0].frontmatter.insert("title".into(), serde_json::json!("Later"));
     app.revert_batch();
     assert_eq!(app.posts[0].title, "Later");
+    assert!(app.status_message.contains("0 field(s) restored"));
+    assert!(app.status_message.contains("1 later edit(s) retained"));
     assert_eq!(read_post(f.path()).unwrap().title, "Original");
 }
