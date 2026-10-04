@@ -139,6 +139,8 @@ mod tests {
             raw_frontmatter: String::new(),
             original_frontmatter: fm,
             original_content: String::new(),
+            original_source: None,
+            original_identity: None,
             format: crate::core::posts::FrontmatterFormat::default(),
         };
         post.sync_fields_from_frontmatter();

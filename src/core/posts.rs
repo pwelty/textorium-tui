@@ -32,29 +32,14 @@ pub struct Post {
     pub original_frontmatter: HashMap<String, serde_json::Value>,
     /// Snapshot of content at load time, used to detect content-only changes
     pub original_content: String,
+    /// Exact loaded bytes and file identity: optimistic write admission, never a cache authority.
+    #[serde(skip)]
+    pub original_source: Option<String>,
+    #[serde(skip)]
+    pub original_identity: Option<(u64, u64)>,
     /// Whether the frontmatter uses YAML (---) or TOML (+++) delimiters
     #[serde(skip)]
     pub format: FrontmatterFormat,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct Frontmatter {
-    #[serde(default)]
-    title: String,
-    #[serde(default)]
-    date: Option<String>,
-    #[serde(default)]
-    draft: Option<bool>,
-    #[serde(default)]
-    content_type: String,
-    #[serde(default)]
-    categories: Vec<String>,
-    #[serde(default)]
-    category: Option<String>,
-    #[serde(default)]
-    tags: Vec<String>,
-    #[serde(flatten)]
-    extra: HashMap<String, serde_json::Value>,
 }
 
 /// Convert a toml::Value to serde_json::Value
@@ -78,6 +63,69 @@ fn toml_value_to_json(value: &toml::Value) -> serde_json::Value {
     }
 }
 
+/// Return slices with the same shape as splitn, but only accept whole delimiter lines.
+fn frontmatter_parts<'a>(source: &'a str, delimiter: &str) -> Vec<&'a str> {
+    let mut lines = source.split_inclusive('\n');
+    let Some(first) = lines.next() else {
+        return vec![source];
+    };
+    if first.trim_end_matches(['\r', '\n']) != delimiter {
+        return vec![source];
+    }
+    let mut offset = first.len();
+    for line in lines {
+        if line.trim_end_matches(['\r', '\n']) == delimiter {
+            return vec![
+                "",
+                &source[delimiter.len()..offset],
+                &source[offset + delimiter.len()..],
+            ];
+        }
+        offset += line.len();
+    }
+    vec![source]
+}
+
+fn file_identity(metadata: &fs::Metadata) -> (u64, u64) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        (metadata.dev(), metadata.ino())
+    }
+    #[cfg(not(unix))]
+    {
+        (metadata.len(), 0)
+    }
+}
+
+fn check_baseline(post: &Post) -> Result<fs::Metadata> {
+    let metadata = fs::symlink_metadata(&post.path).context(
+        "File changed or deleted externally; edits retained, refresh/reconcile before saving",
+    )?;
+    let bytes =
+        fs::read_to_string(&post.path).context("Cannot read file baseline; edits retained")?;
+    if metadata.file_type().is_symlink()
+        || post.original_identity != Some(file_identity(&metadata))
+        || post.original_source.as_deref() != Some(bytes.as_str())
+    {
+        anyhow::bail!("File changed externally; edits retained, refresh/reconcile before saving");
+    }
+    Ok(metadata)
+}
+
+fn normalize_category(frontmatter: &mut HashMap<String, serde_json::Value>) {
+    if let Some(category) = frontmatter
+        .get("category")
+        .and_then(|v| v.as_str())
+        .map(str::to_owned)
+    {
+        frontmatter.remove("category");
+        frontmatter
+            .entry("categories".into())
+            .or_insert_with(|| serde_json::json!([category]));
+    }
+}
+
 /// Parse frontmatter and body from markdown content
 /// Returns (parsed HashMap, body text, raw frontmatter text, format)
 fn parse_frontmatter(
@@ -88,9 +136,9 @@ fn parse_frontmatter(
     String,
     FrontmatterFormat,
 )> {
-    // Detect TOML frontmatter (+++...+++)
+    // Delimiters must occupy whole lines, not occur inside values or prose.
     if content.starts_with("+++") {
-        let parts: Vec<&str> = content.splitn(3, "+++").collect();
+        let parts = frontmatter_parts(content, "+++");
         if parts.len() < 3 {
             return Ok((
                 HashMap::new(),
@@ -113,16 +161,7 @@ fn parse_frontmatter(
         }
 
         // Normalize: merge singular "category" into "categories" array (same as YAML path)
-        if let Some(cat) = fm_map.remove("category") {
-            if !fm_map.contains_key("categories") {
-                if let Some(s) = cat.as_str() {
-                    fm_map.insert(
-                        "categories".to_string(),
-                        serde_json::Value::Array(vec![serde_json::Value::String(s.to_string())]),
-                    );
-                }
-            }
-        }
+        normalize_category(&mut fm_map);
 
         return Ok((fm_map, body, raw_toml, FrontmatterFormat::Toml));
     }
@@ -137,7 +176,7 @@ fn parse_frontmatter(
         ));
     }
 
-    let parts: Vec<&str> = content.splitn(3, "---").collect();
+    let parts = frontmatter_parts(content, "---");
     if parts.len() < 3 {
         return Ok((
             HashMap::new(),
@@ -149,60 +188,15 @@ fn parse_frontmatter(
 
     let raw_yaml = parts[1].to_string();
 
-    let frontmatter: Frontmatter =
-        serde_yaml::from_str(parts[1]).context("Failed to parse YAML frontmatter")?;
-
+    let mut fm_map: HashMap<String, serde_json::Value> = if parts[1].trim().is_empty() {
+        HashMap::new()
+    } else {
+        serde_yaml::from_str(parts[1]).context("Failed to parse YAML frontmatter")?
+    };
+    // Keep every actual key/value (including empty arrays and absent title), with
+    // the established singular-category projection used by the metadata UI.
+    normalize_category(&mut fm_map);
     let body = parts[2].trim().to_string();
-
-    // Convert to HashMap
-    let mut fm_map = HashMap::new();
-    fm_map.insert(
-        "title".to_string(),
-        serde_json::Value::String(frontmatter.title.clone()),
-    );
-
-    if let Some(date) = &frontmatter.date {
-        fm_map.insert("date".to_string(), serde_json::Value::String(date.clone()));
-    }
-
-    if let Some(draft) = frontmatter.draft {
-        fm_map.insert("draft".to_string(), serde_json::Value::Bool(draft));
-    }
-
-    if !frontmatter.content_type.is_empty() {
-        fm_map.insert(
-            "content_type".to_string(),
-            serde_json::Value::String(frontmatter.content_type.clone()),
-        );
-    }
-
-    if !frontmatter.categories.is_empty() {
-        let cats: Vec<serde_json::Value> = frontmatter
-            .categories
-            .iter()
-            .map(|c| serde_json::Value::String(c.clone()))
-            .collect();
-        fm_map.insert("categories".to_string(), serde_json::Value::Array(cats));
-    } else if let Some(cat) = &frontmatter.category {
-        fm_map.insert(
-            "categories".to_string(),
-            serde_json::Value::Array(vec![serde_json::Value::String(cat.clone())]),
-        );
-    }
-
-    if !frontmatter.tags.is_empty() {
-        let tags: Vec<serde_json::Value> = frontmatter
-            .tags
-            .iter()
-            .map(|t| serde_json::Value::String(t.clone()))
-            .collect();
-        fm_map.insert("tags".to_string(), serde_json::Value::Array(tags));
-    }
-
-    // Add extra fields
-    for (key, value) in frontmatter.extra {
-        fm_map.insert(key, value);
-    }
 
     Ok((fm_map, body, raw_yaml, FrontmatterFormat::Yaml))
 }
@@ -269,6 +263,7 @@ impl Post {
 
 /// Read a single post from a file
 pub fn read_post(path: &Path) -> Result<Post> {
+    let identity = file_identity(&fs::symlink_metadata(path)?);
     let content = fs::read_to_string(path)
         .with_context(|| format!("Failed to read post: {}", path.display()))?;
 
@@ -285,6 +280,8 @@ pub fn read_post(path: &Path) -> Result<Post> {
         content: body.clone(),
         original_frontmatter: frontmatter.clone(),
         original_content: body,
+        original_source: Some(content),
+        original_identity: Some(identity),
         frontmatter,
         raw_frontmatter: raw_frontmatter_text,
         format,
@@ -301,60 +298,74 @@ pub struct ScanResult {
 
 /// Scan directory for all markdown posts
 pub fn scan_posts(config: &Config) -> Result<ScanResult> {
-    let content_path = config.content_path();
-
-    if !content_path.exists() {
-        return Ok(ScanResult {
-            posts: Vec::new(),
-            errors: Vec::new(),
-        });
-    }
-
     let mut posts = Vec::new();
     let mut errors = Vec::new();
 
-    for entry_result in WalkDir::new(&content_path)
-        .follow_links(true)
-        .max_depth(20)
-        .into_iter()
-    {
-        let entry = match entry_result {
-            Ok(e) => e,
-            Err(e) => {
-                let path = e
-                    .path()
-                    .unwrap_or(std::path::Path::new("<unknown>"))
-                    .to_path_buf();
-                errors.push((path, format!("IO error: {}", e)));
-                continue;
-            }
-        };
-        let path = entry.path();
-
-        // Skip non-markdown files
-        if !path.is_file() {
+    for content_path in config.content_paths() {
+        if !content_path.exists() {
             continue;
         }
+        for entry_result in WalkDir::new(&content_path)
+            .follow_links(false)
+            .max_depth(20)
+            .into_iter()
+            .filter_entry(|entry| {
+                !entry.file_type().is_dir()
+                    || !matches!(
+                        entry.file_name().to_str(),
+                        Some(
+                            ".git"
+                                | "node_modules"
+                                | "vendor"
+                                | "target"
+                                | "dist"
+                                | "public"
+                                | "_site"
+                                | "_output"
+                                | ".next"
+                                | ".astro"
+                                | ".textorium"
+                        )
+                    )
+            })
+        {
+            let entry = match entry_result {
+                Ok(e) => e,
+                Err(e) => {
+                    let path = e
+                        .path()
+                        .unwrap_or(std::path::Path::new("<unknown>"))
+                        .to_path_buf();
+                    errors.push((path, format!("IO error: {}", e)));
+                    continue;
+                }
+            };
+            let path = entry.path();
 
-        let ext = path.extension().and_then(|s| s.to_str());
-        if ext != Some("md") && ext != Some("markdown") {
-            continue;
-        }
-
-        // Skip Hugo section index files (_index.md, index.md)
-        if config.ssg == SsgType::Hugo {
-            let file_name = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
-            if file_name == "_index.md" || file_name == "index.md" {
+            // Skip non-markdown files
+            if !entry.file_type().is_file() {
                 continue;
             }
-        }
 
-        match read_post(path) {
-            Ok(post) => posts.push(post),
-            Err(e) => errors.push((path.to_path_buf(), format!("{:#}", e))),
+            let ext = path.extension().and_then(|s| s.to_str());
+            if ext != Some("md") && ext != Some("markdown") {
+                continue;
+            }
+
+            // Hugo branch indexes are sections; leaf index.md files are posts.
+            if config.ssg == SsgType::Hugo {
+                let file_name = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
+                if file_name == "_index.md" {
+                    continue;
+                }
+            }
+
+            match read_post(path) {
+                Ok(post) => posts.push(post),
+                Err(e) => errors.push((path.to_path_buf(), format!("{:#}", e))),
+            }
         }
     }
-
     // Sort by date, newest first
     posts.sort_by_key(|b| std::cmp::Reverse(b.date));
 
@@ -485,18 +496,34 @@ fn find_toml_key_lines(lines: &[&str], key: &str) -> Option<(usize, usize)> {
 }
 
 /// Write content to a file atomically: write to a temp file in the same directory,
-/// fsync, then rename over the target. Prevents data loss on crash/power loss.
-fn atomic_write(path: &Path, content: &str) -> Result<()> {
+/// fsync its content, recheck the baseline, then rename over the target.
+/// This protects replacement atomicity, not cross-process races or directory durability.
+fn atomic_write(post: &Post, content: &str) -> Result<()> {
     use std::io::Write;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    let path = &post.path;
+    let metadata = check_baseline(post)?;
 
-    let tmp_path = path.with_extension("md.tmp");
+    let tmp_path = path.with_file_name(format!(
+        ".textorium-{}-{}.tmp",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    ));
+    // Never truncate a preexisting sibling file (including another process's temp).
+    let mut f = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&tmp_path)
+        .context("Failed to create unique save file; edits retained")?;
     let result = (|| -> Result<()> {
-        let mut f = fs::File::create(&tmp_path)
-            .with_context(|| format!("Failed to create temp file: {}", tmp_path.display()))?;
+        f.set_permissions(metadata.permissions())?;
         f.write_all(content.as_bytes())
             .with_context(|| format!("Failed to write temp file: {}", tmp_path.display()))?;
         f.sync_all()
             .with_context(|| format!("Failed to sync temp file: {}", tmp_path.display()))?;
+        // Optimistic check, not a cross-process filesystem transaction.
+        check_baseline(post)?;
         fs::rename(&tmp_path, path).with_context(|| {
             format!(
                 "Failed to rename {} to {}",
@@ -517,18 +544,54 @@ fn atomic_write(path: &Path, content: &str) -> Result<()> {
 
 /// Save a post back to disk, preserving original frontmatter formatting where possible
 pub fn save_post(post: &Post) -> Result<()> {
-    let (open_delim, close_delim) = match post.format {
+    if post.frontmatter == post.original_frontmatter && post.content == post.original_content {
+        return Ok(()); // A true no-op: no stat, rewrite, or absent-field materialization.
+    }
+    check_baseline(post)?;
+    let (mut open_delim, mut close_delim) = match post.format {
         FrontmatterFormat::Yaml => ("---", "---"),
         FrontmatterFormat::Toml => ("+++", "+++"),
     };
 
-    // If frontmatter is unchanged, write back the original file exactly
+    let source = post
+        .original_source
+        .as_deref()
+        .context("Missing loaded baseline; reload before saving")?;
+    let parts = frontmatter_parts(source, open_delim);
+    let has_frontmatter = parts.len() == 3;
+    if !has_frontmatter {
+        open_delim = "---";
+        close_delim = "---";
+    }
+    let body = if has_frontmatter { parts[2] } else { source };
+    // Keep boundary whitespace when transforming the trimmed body projection.
+    let saved_body = if post.content == post.original_content {
+        body.to_string()
+    } else if has_frontmatter && body.is_empty() {
+        // A header ending at EOF needs a delimiter line break before a new body.
+        let newline = if post.raw_frontmatter.contains("\r\n") {
+            "\r\n"
+        } else {
+            "\n"
+        };
+        format!("{}{}", newline, post.content)
+    } else if has_frontmatter {
+        let leading = body.len() - body.trim_start().len();
+        let trailing = body.trim_end().len().max(leading);
+        format!("{}{}{}", &body[..leading], post.content, &body[trailing..])
+    } else {
+        post.content.clone()
+    };
+
+    // Content-only saves retain the exact original header (or remain plain Markdown).
     if post.frontmatter == post.original_frontmatter {
-        let full_content = format!(
-            "{}{}{}\n\n{}\n",
-            open_delim, post.raw_frontmatter, close_delim, post.content
-        );
-        atomic_write(&post.path, &full_content)?;
+        let prefix = if has_frontmatter {
+            &source[..source.len() - body.len()]
+        } else {
+            ""
+        };
+        let full_content = format!("{}{}", prefix, saved_body);
+        atomic_write(post, &full_content)?;
         return Ok(());
     }
 
@@ -537,13 +600,20 @@ pub fn save_post(post: &Post) -> Result<()> {
     let mut result_lines: Vec<String> = Vec::new();
     let mut processed_keys: std::collections::HashSet<String> = std::collections::HashSet::new();
 
-    let is_toml = post.format == FrontmatterFormat::Toml;
+    let is_toml = open_delim == "+++";
 
     // Process existing lines, replacing modified values and skipping deleted keys
     let mut i = 0;
     while i < raw_lines.len() {
         let line = raw_lines[i];
         let trimmed = line.trim();
+        if (trimmed.starts_with("category:") || trimmed.starts_with("category ="))
+            && post.frontmatter.get("categories") == post.original_frontmatter.get("categories")
+        {
+            result_lines.push(line.to_string());
+            i += 1;
+            continue;
+        }
 
         if is_toml {
             // TOML: top-level key lines use `key = value`
@@ -634,13 +704,34 @@ pub fn save_post(post: &Post) -> Result<()> {
     }
 
     // Reconstruct the file
-    let frontmatter_text = result_lines.join("\n");
+    let newline = if post.raw_frontmatter.contains("\r\n") {
+        "\r\n"
+    } else {
+        "\n"
+    };
+    let frontmatter_text = result_lines.join(newline);
+    let frontmatter_text = frontmatter_text.trim_start_matches(['\r', '\n']);
+    let boundary = if frontmatter_text.ends_with(newline) {
+        ""
+    } else {
+        newline
+    };
     let full_content = format!(
-        "{}\n{}\n{}\n\n{}\n",
-        open_delim, frontmatter_text, close_delim, post.content
+        "{}{}{}{}{}{}{}",
+        open_delim,
+        newline,
+        frontmatter_text,
+        boundary,
+        close_delim,
+        if has_frontmatter { "" } else { newline },
+        saved_body
     );
 
-    atomic_write(&post.path, &full_content)?;
+    let (saved_frontmatter, _, _, _) = parse_frontmatter(&full_content)?;
+    if saved_frontmatter != post.frontmatter {
+        anyhow::bail!("Cannot safely serialize this frontmatter edit; edits retained, use external editor after reconciliation");
+    }
+    atomic_write(post, &full_content)?;
 
     Ok(())
 }
@@ -758,21 +849,15 @@ pub fn smartquotes(text: &str) -> String {
     let chars: Vec<char> = text.chars().collect();
     let len = chars.len();
     let mut i = 0;
-    let mut in_code = false;
+    let protected_bytes = markdown_code_mask(text);
+    let protected: Vec<bool> = text
+        .char_indices()
+        .map(|(offset, _)| protected_bytes[offset])
+        .collect();
 
     while i < len {
         let ch = chars[i];
-
-        // Toggle code span tracking
-        if ch == '`' {
-            in_code = !in_code;
-            result.push(ch);
-            i += 1;
-            continue;
-        }
-
-        // Skip conversion inside code spans
-        if in_code {
+        if protected[i] {
             result.push(ch);
             i += 1;
             continue;
@@ -821,6 +906,101 @@ pub fn smartquotes(text: &str) -> String {
     result
 }
 
+/// Protect fenced blocks first, then matched equal-length backtick spans in prose.
+fn markdown_code_mask(text: &str) -> Vec<bool> {
+    let bytes = text.as_bytes();
+    let mut mask = vec![false; bytes.len()];
+    let mut fence: Option<(u8, usize, usize)> = None;
+    let mut offset = 0;
+    for line in text.split_inclusive('\n') {
+        let mut trimmed = line.trim_start_matches(' ');
+        let mut indent = line.len() - trimmed.len();
+        // Recognize common blockquote/list containers without rewriting their bytes.
+        while indent <= 3 && trimmed.starts_with('>') {
+            trimmed = trimmed[1..].trim_start_matches(' ');
+            indent = 0;
+        }
+        let mut container_indent = 0;
+        if fence.is_none() && indent <= 3 {
+            let list_prefix = if ["- ", "+ ", "* "]
+                .iter()
+                .any(|prefix| trimmed.starts_with(prefix))
+            {
+                2
+            } else {
+                let digits = trimmed.bytes().take_while(u8::is_ascii_digit).count();
+                if (1..=9).contains(&digits)
+                    && (trimmed[digits..].starts_with(". ") || trimmed[digits..].starts_with(") "))
+                {
+                    digits + 2
+                } else {
+                    0
+                }
+            };
+            if list_prefix > 0 {
+                trimmed = &trimmed[list_prefix..];
+                container_indent = list_prefix;
+            }
+        }
+        let marker = trimmed.as_bytes().first().copied().unwrap_or(0);
+        let run = trimmed.bytes().take_while(|b| *b == marker).count();
+        let was_fenced = fence.is_some();
+        if let Some((character, length, max_indent)) = fence {
+            if indent <= max_indent
+                && marker == character
+                && run >= length
+                && trimmed[run..].trim().is_empty()
+            {
+                fence = None;
+            }
+        } else if indent <= 3
+            && matches!(marker, b'`' | b'~')
+            && run >= 3
+            && (marker != b'`' || !trimmed[run..].contains('`'))
+        {
+            fence = Some((marker, run, 3 + container_indent));
+        }
+        if was_fenced || fence.is_some() || indent >= 4 || line.starts_with('\t') {
+            mask[offset..offset + line.len()].fill(true);
+        }
+        offset += line.len();
+    }
+    let mut i = 0;
+    while i < bytes.len() {
+        if mask[i] || bytes[i] != b'`' {
+            i += 1;
+            continue;
+        }
+        let escapes = bytes[..i].iter().rev().take_while(|b| **b == b'\\').count();
+        let run = bytes[i..].iter().take_while(|b| **b == b'`').count();
+        if escapes % 2 == 1 {
+            i += run;
+            continue;
+        }
+        let mut j = i + run;
+        let mut end = None;
+        while j < bytes.len() && !mask[j] {
+            if bytes[j] == b'`' {
+                let closing = bytes[j..].iter().take_while(|b| **b == b'`').count();
+                if closing == run {
+                    end = Some(j + closing);
+                    break;
+                }
+                j += closing;
+            } else {
+                j += 1;
+            }
+        }
+        if let Some(end) = end {
+            mask[i..end].fill(true);
+            i = end;
+        } else {
+            i += run;
+        }
+    }
+    mask
+}
+
 /// Returns true if a quote at position `i` should be an opening quote.
 /// Opening context: start of string, after whitespace, or after opening punctuation.
 fn is_opening_context(chars: &[char], i: usize) -> bool {
@@ -830,6 +1010,10 @@ fn is_opening_context(chars: &[char], i: usize) -> bool {
     let prev = chars[i - 1];
     prev.is_whitespace() || matches!(prev, '(' | '[' | '{' | '\u{2014}' | '\u{2013}' | '\n')
 }
+
+#[cfg(test)]
+#[path = "posts_safety_tests.rs"]
+mod safety_tests;
 
 #[cfg(test)]
 mod tests {
@@ -1244,8 +1428,7 @@ mod tests {
 
         // Simulate what app.rs should do: reload baseline
         let reloaded = read_post(f.path()).unwrap();
-        post.original_frontmatter = reloaded.original_frontmatter;
-        post.raw_frontmatter = reloaded.raw_frontmatter;
+        post = reloaded;
 
         // Second save with no further changes should trigger unchanged fast path
         save_post(&post).unwrap();

@@ -24,10 +24,10 @@ src/
 
 - No subcommand launches the synchronous ratatui/crossterm TUI.
 - Config is `~/.config/textorium/config.json`; multi-site format supports an active site and editor preference, with legacy flat-config compatibility.
-- Posts on disk are the source of truth; no database or persistent post cache. Ordinary metadata edits are in memory until Ctrl+S; current batch operations write immediately.
+- Posts on disk are the source of truth; no database or persistent post cache. All metadata/body/batch edits are in memory until Ctrl+S. Refresh refuses dirty posts; batch undo stages field-only inverse changes and never writes disk.
 - YAML frontmatter uses `serde_yaml`; TOML uses `toml`. Preserve current dependencies unless separately authorized.
-- SSG marker detection priority: Hugo → Jekyll → Eleventy → Astro; unknown sites default to Hugo. Hugo uses `content`, Jekyll `_posts`, Eleventy `posts`/`src`, Astro `src/content`.
-- Default dev URLs use ports 1313 / 4000 / 8080 / 4321 respectively. Discovery and preview limitations are documented in the migration follow-ups, not repaired by consolidation.
+- SSG marker detection priority: Hugo → Jekyll → Eleventy → Astro; unknown sites retain a Hugo-compatible type but fall back to site-root Markdown when `content` is absent. Hugo includes leaf `index.md` but not branch `_index.md`; Jekyll scans `_posts` and sibling `_drafts`; Eleventy uses `posts`/`src`/site root, Astro `src/content`. Exact package dependency hints supplement markers; do not execute generator config code.
+- Default dev URLs use ports 1313 / 4000 / 8080 / 4321 respectively. Per-site `server_url` overrides the preview base; Hugo leaf bundles route to their directory. See README for pruning, optimistic save protection, and remaining permalink limitations.
 
 ## Current source capabilities
 
