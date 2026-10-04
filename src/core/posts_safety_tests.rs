@@ -1,6 +1,42 @@
 use super::*;
 
 #[test]
+fn safety_body_projection_preserves_significant_whitespace_and_recomposes() {
+    for (body, expected) in [
+        ("\n\n    \"raw\"  \n\n", "    \"raw\"  "),
+        (
+            "\r\n \t\r\n\tcode\r\n \"prose\"  \r\n\t\r\n",
+            "\tcode\r\n \"prose\"  ",
+        ),
+        ("\n   prose  ", "   prose  "),
+        ("\n \t\r\n", ""),
+        ("", ""),
+    ] {
+        let (leading, projected, trailing) = body_projection(body);
+        assert_eq!(projected, expected);
+        assert_eq!(format!("{leading}{projected}{trailing}"), body);
+        for header in [
+            "---\ntitle: Original\n---",
+            "+++\ntitle = \"Original\"\n+++",
+        ] {
+            let source = format!("{header}{body}");
+            let (_dir, path, mut post) = fixture(&source);
+            assert_eq!(post.content, expected);
+            post.frontmatter
+                .insert("title".into(), serde_json::json!("Updated"));
+            save_post(&post).unwrap();
+            assert!(fs::read_to_string(&path).unwrap().ends_with(body));
+            post = read_post(&path).unwrap();
+            post.content = smartquotes(&post.content);
+            save_post(&post).unwrap();
+            assert!(fs::read_to_string(&path)
+                .unwrap()
+                .ends_with(&format!("{leading}{}{trailing}", smartquotes(expected))));
+        }
+    }
+}
+
+#[test]
 fn safety_adding_body_after_header_eof_keeps_closing_delimiter_valid() {
     for source in [
         "---\ntitle: Header\n---",

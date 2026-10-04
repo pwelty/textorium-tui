@@ -21,7 +21,7 @@ These changes are in source after the v1.0.2 release, not yet distributed by tha
 - Refuse changed/deleted/replaced/symlinked files using loaded bytes and Unix identity. Use exclusive unique temp files, preserve file permissions, and recheck before atomic replacement (optimistic, not transactional).
 - Stage batch edits until Ctrl+S. Undo before/after save is in-memory and field-owned; preserve later edits/body and report partial save errors.
 - Include Hugo leaf bundles and Jekyll drafts; extend Astro/Eleventy markers and exact package hints, define Markdown/Eleventy fallback roots, prune generated/dependency/Git trees and symlinks, fix Hugo leaf previews, and preserve optional per-site preview server bases.
-- Protect fenced and multi-backtick inline code from smart quotes. Add behavioral regressions and a shared synthetic fixture set with real PTY/CLI smoke; preserve preexisting test coverage. No version/tag/release/formula change.
+- Protect fenced and multi-backtick inline code from smart quotes. Preserve code-significant indentation in the loaded YAML/TOML body and use the same blank-line boundaries on save. Recognize blockquote space/tab prefixes by Markdown columns without turning indented fence-like text into a fence. Add integrated read/transform/save regressions and a shared synthetic fixture set with real PTY/CLI smoke; preserve preexisting test coverage. No version/tag/release/formula change.
 
 ### Improvements
 

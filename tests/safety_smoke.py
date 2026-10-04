@@ -164,10 +164,10 @@ def main():
     checks = []
     def check(name, passed): checks.append({'name': name, 'passed': bool(passed)})
     source = b'---\r\ntitle: Original\r\ndraft: false\r\n---\r\n\r\n\r\n"prose" -- ...\r\n~~~rust\r\n"raw" -- ...\r\n~~~\r\n\r\n'
-    def scenario(name, action):
+    def scenario(name, action, fixture_source=source):
         session = None
         try:
-            session = Session(binary, output / name, source)
+            session = Session(binary, output / name, fixture_source)
             action(session)
         except Exception as error:
             check(name + ': orchestration', False)
@@ -249,6 +249,20 @@ def main():
     scenario('body-refresh-code', body)
     scenario('external-conflict', conflict)
     scenario('batch-undo', batch)
+
+    # Qualify code-significant context through real Q / Ctrl+S / quit keys.
+    def literal_code(s):
+        original = s.path.read_bytes()
+        s.key(b'\t\tQ')
+        check(s.folder.name + ': staged', s.path.read_bytes() == original)
+        s.key(b'\x13')
+        expected = original.replace(b'"prose" -- ...', '“prose” — …'.encode())
+        check(s.folder.name + ': exact saved code and prose bytes', s.path.read_bytes() == expected)
+        check(s.folder.name + ': visible save', 'Saved' in s.snapshot('code-preserved-save'))
+
+    for name, header in [('first-indented-yaml', b'---\r\ntitle: Original\r\n---'), ('first-indented-toml', b'+++\r\ntitle = "Original"\r\n+++')]:
+        scenario(name, literal_code, header + b'\r\n\r\n    "raw" -- ...\r\n\r\n"prose" -- ...  \r\n\r\n')
+    scenario('tab-blockquote-fence', literal_code, b'---\ntitle: Original\n---\n\n>\t~~~rust\n>\t"raw" -- ...\n>\t~~~\n\n"prose" -- ...\n')
 
     cases = json.loads((Path(__file__).parent / 'fixtures' / 'discovery.json').read_text())
     discovery = output / 'discovery'

@@ -126,6 +126,25 @@ fn normalize_category(frontmatter: &mut HashMap<String, serde_json::Value>) {
     }
 }
 
+/// Separate boundary blank lines from the editable body. Keep indentation and
+/// trailing spaces on nonblank lines: they can be Markdown/code syntax, not padding.
+/// Load and save must use the same boundaries, including CRLF and whitespace-only bodies.
+fn body_projection(body: &str) -> (&str, &str, &str) {
+    let mut offset = 0;
+    let mut start = None;
+    let mut end = 0;
+    for line in body.split_inclusive('\n') {
+        if !line.trim().is_empty() {
+            start.get_or_insert(offset);
+            end = offset + line.trim_end_matches(['\r', '\n']).len();
+        }
+        offset += line.len();
+    }
+    let start = start.unwrap_or(body.len());
+    let end = end.max(start);
+    (&body[..start], &body[start..end], &body[end..])
+}
+
 /// Parse frontmatter and body from markdown content
 /// Returns (parsed HashMap, body text, raw frontmatter text, format)
 fn parse_frontmatter(
@@ -149,7 +168,7 @@ fn parse_frontmatter(
         }
 
         let raw_toml = parts[1].to_string();
-        let body = parts[2].trim().to_string();
+        let body = body_projection(parts[2]).1.to_string();
 
         let toml_table: toml::Table =
             toml::from_str(parts[1]).context("Failed to parse TOML frontmatter")?;
@@ -196,7 +215,7 @@ fn parse_frontmatter(
     // Keep every actual key/value (including empty arrays and absent title), with
     // the established singular-category projection used by the metadata UI.
     normalize_category(&mut fm_map);
-    let body = parts[2].trim().to_string();
+    let body = body_projection(parts[2]).1.to_string();
 
     Ok((fm_map, body, raw_yaml, FrontmatterFormat::Yaml))
 }
@@ -564,7 +583,7 @@ pub fn save_post(post: &Post) -> Result<()> {
         close_delim = "---";
     }
     let body = if has_frontmatter { parts[2] } else { source };
-    // Keep boundary whitespace when transforming the trimmed body projection.
+    // Reattach only the blank-line envelope omitted by the loaded projection.
     let saved_body = if post.content == post.original_content {
         body.to_string()
     } else if has_frontmatter && body.is_empty() {
@@ -576,9 +595,8 @@ pub fn save_post(post: &Post) -> Result<()> {
         };
         format!("{}{}", newline, post.content)
     } else if has_frontmatter {
-        let leading = body.len() - body.trim_start().len();
-        let trailing = body.trim_end().len().max(leading);
-        format!("{}{}{}", &body[..leading], post.content, &body[trailing..])
+        let (leading, _, trailing) = body_projection(body);
+        format!("{}{}{}", leading, post.content, trailing)
     } else {
         post.content.clone()
     };
@@ -906,6 +924,46 @@ pub fn smartquotes(text: &str) -> String {
     result
 }
 
+/// Consume Markdown indentation using four-column tab stops, without altering bytes.
+fn markdown_indent<'a>(line: &'a str, column: &mut usize) -> (&'a str, usize) {
+    let start = *column;
+    let mut end = 0;
+    for byte in line.bytes() {
+        match byte {
+            b' ' => *column += 1,
+            b'\t' => *column += 4 - *column % 4,
+            _ => break,
+        }
+        end += 1;
+    }
+    (&line[end..], *column - start)
+}
+
+/// Strip blockquote markers plus their ONE optional whitespace column. A tab
+/// after `>` may leave virtual indentation: do not erase it or the following spaces.
+fn markdown_quote_content(line: &str) -> (&str, usize) {
+    let mut column = 0;
+    let (mut content, mut indent) = markdown_indent(line, &mut column);
+    while indent <= 3 && content.starts_with('>') {
+        content = &content[1..];
+        column += 1;
+        let mut remaining = 0;
+        if content.starts_with(' ') {
+            content = &content[1..];
+            column += 1;
+        } else if content.starts_with('\t') {
+            content = &content[1..];
+            let width = 4 - column % 4;
+            column += width;
+            remaining = width - 1;
+        }
+        let (rest, spacing) = markdown_indent(content, &mut column);
+        content = rest;
+        indent = remaining + spacing;
+    }
+    (content, indent)
+}
+
 /// Protect fenced blocks first, then matched equal-length backtick spans in prose.
 fn markdown_code_mask(text: &str) -> Vec<bool> {
     let bytes = text.as_bytes();
@@ -913,13 +971,8 @@ fn markdown_code_mask(text: &str) -> Vec<bool> {
     let mut fence: Option<(u8, usize, usize)> = None;
     let mut offset = 0;
     for line in text.split_inclusive('\n') {
-        let mut trimmed = line.trim_start_matches(' ');
-        let mut indent = line.len() - trimmed.len();
         // Recognize common blockquote/list containers without rewriting their bytes.
-        while indent <= 3 && trimmed.starts_with('>') {
-            trimmed = trimmed[1..].trim_start_matches(' ');
-            indent = 0;
-        }
+        let (mut trimmed, indent) = markdown_quote_content(line);
         let mut container_indent = 0;
         if fence.is_none() && indent <= 3 {
             let list_prefix = if ["- ", "+ ", "* "]

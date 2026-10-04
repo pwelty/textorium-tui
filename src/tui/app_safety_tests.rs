@@ -156,3 +156,64 @@ fn safety_undo_preserves_subsequent_change_to_same_batch_field() {
     assert!(app.status_message.contains("1 later edit(s) retained"));
     assert_eq!(read_post(f.path()).unwrap().title, "Original");
 }
+
+// Read -> actual App transform -> explicit save -> reload, not helper-only coverage.
+fn assert_smartquotes_save(source: &str, expected: &str) {
+    let f = create_temp_markdown(source);
+    let mut app = make_app(vec![read_post(f.path()).unwrap()]);
+    app.ensure_filtered();
+    app.focused_pane = 2;
+    app.apply_smartquotes();
+    assert_eq!(std::fs::read_to_string(f.path()).unwrap(), source, "must stage edits");
+    app.save_all();
+    assert_eq!(std::fs::read_to_string(f.path()).unwrap(), expected, "source: {source:?}");
+    assert!(app.status_message.contains("Saved"));
+    assert_eq!(app.dirty_count(), 0);
+    let reloaded = read_post(f.path()).unwrap();
+    assert_eq!(app.posts[0].content, reloaded.content);
+    app.apply_smartquotes();
+    assert_eq!(app.dirty_count(), 0, "repeat transform must be idempotent");
+}
+
+#[test]
+fn safety_first_indented_code_survives_smartquotes_and_save() {
+    for header in ["---\ntitle: Original\n---\n", "+++\ntitle = \"Original\"\n+++\n", ""] {
+        for indent in ["    ", "\t", " \t", "   \t"] {
+            for newline in ["\n", "\r\n"] {
+                for ending in ["", newline] {
+                    let body = format!("{newline}{indent}\"raw\" -- ...{newline}{indent}'second' -- ...{newline}{newline}\"prose\" -- ...  {ending}");
+                    let source = format!("{}{body}", header.replace('\n', newline));
+                    let expected = source.replace("\"prose\" -- ...", "“prose” — …");
+                    assert_smartquotes_save(&source, &expected);
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn safety_tab_space_blockquote_fences_survive_smartquotes_and_save() {
+    for prefix in [">\t", "> \t", " >\t", "  >\t", "   >\t", ">\t ", ">\t>\t", "> >\t"] {
+        for fence in ["~~~", "~~~~", "```", "````"] {
+            let source = format!("---\ntitle: Original\n---\n\n{prefix}{fence}rust\n{prefix}\"raw\" -- ... 'code'\n{prefix}{fence}\n\n\"prose\" -- ...\n");
+            assert_smartquotes_save(&source, &source.replace("\"prose\" -- ...", "“prose” — …"));
+        }
+    }
+}
+
+#[test]
+fn safety_existing_top_level_fence_save_control() {
+    let source = "---\ntitle: Original\n---\n\n~~~\n\"raw\" -- ...\n~~~\n\n\"prose\"\n";
+    assert_smartquotes_save(source, &source.replace("\"prose\"", "“prose”"));
+}
+
+#[test]
+fn safety_blockquote_indentation_does_not_turn_code_into_a_fence() {
+    // Five spaces after > leave four code columns; tabs leave virtual columns.
+    // These are indented code containing fence-looking text, NOT fence openers.
+    for prefix in [">     ", ">\t  ", "> \t  ", " >\t   ", "  >\t    ", "   >\t ", ">\t\t"] {
+        let source = format!("---\ntitle: Original\n---\n\n{prefix}~~~\n\n> \"quoted prose\" -- ...\n\n{prefix}\"raw\" -- ...\n\n\"prose\"\n");
+        let expected = source.replace("\"quoted prose\" -- ...", "“quoted prose” — …").replace("\"prose\"", "“prose”");
+        assert_smartquotes_save(&source, &expected);
+    }
+}
