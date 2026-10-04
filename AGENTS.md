@@ -53,6 +53,8 @@ Use disposable synthetic content for tests. No GUI launch or live-site mutation 
 
 ## Release process (separate authorization)
 
+Follow [the release and Homebrew handoff](docs/releases.md) for publication gates, actual-artifact verification, partial-failure recovery, and cleanup. Tagging automatically publishes assets **and updates the Homebrew tap**.
+
 1. Qualify the intended source and update its version/changelog.
 2. Commit and push the reviewed source.
 3. Push a `vX.Y.Z` tag only with release authority.
