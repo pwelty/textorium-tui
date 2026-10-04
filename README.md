@@ -14,7 +14,9 @@ Built with Rust for instant startup (~15ms) and zero-lag navigation, even with 6
 brew install pwelty/tap/textorium
 ```
 
-The latest published release/Homebrew formula is **v1.0.2 (2026-03-28)**. This README describes current source; the March release does not include the later Astro/templates/multi-site/property-filter/batch features. This consolidation does not publish a new release. Source builds still report the unchanged Cargo package version, 1.0.2.
+**Version 1.1.0** includes Astro, templates, multi-site management, property filters, staged batch edits, and the safety/discovery fixes described below. See [GitHub Releases](https://github.com/pwelty/textorium-tui/releases/latest) for published binaries. Existing Homebrew users can run `brew update && brew upgrade textorium`.
+
+**Batch behavior:** edits and undo are staged in memory; press **Ctrl+S** to write them. Refresh refuses unsaved edits, and saves refuse files changed externally instead of overwriting them.
 
 Build newer source from this repository:
 
@@ -125,7 +127,7 @@ textorium templates create article
 textorium templates list
 textorium new "Templated post" --template article --no-edit
 
-# Register and switch sites (source features after v1.0.2)
+# Register and switch sites
 textorium sites add ~/Projects/my-blog --name blog
 textorium sites list
 textorium sites use blog
