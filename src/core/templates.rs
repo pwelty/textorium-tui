@@ -234,6 +234,7 @@ mod tests {
             content_dir: "content".to_string(),
             ssg: SsgType::Hugo,
             editor: None,
+            server_url: None,
         }
     }
 

@@ -12,7 +12,16 @@ These changes are in source after the v1.0.2 release, not yet distributed by tha
 - Site-local YAML post templates and CLI management (#127)
 - Multi-site registry, switching, and legacy config migration (#128)
 - Property filters in the TUI and repeatable CLI `--filter` (#129)
-- Batch frontmatter operations with confirmation and batch revert (#130); these currently write immediately
+- Batch frontmatter operations with confirmation and batch revert (#130); staging/undo semantics are hardened below
+
+### Safety and discovery (#133, #125)
+
+- Refuse refresh while any post has unsaved metadata/body edits; guard collection-changing reloads and dirty selected-post editor handoffs.
+- Preserve exact body bytes on metadata saves, make no-op saves nonwriting, keep plain body edits plain, and recognize only whole-line frontmatter delimiters. Retain absent/empty metadata fields rather than inventing or dropping them.
+- Refuse changed/deleted/replaced/symlinked files using loaded bytes and Unix identity. Use exclusive unique temp files, preserve file permissions, and recheck before atomic replacement (optimistic, not transactional).
+- Stage batch edits until Ctrl+S. Undo before/after save is in-memory and field-owned; preserve later edits/body and report partial save errors.
+- Include Hugo leaf bundles and Jekyll drafts; extend Astro/Eleventy markers and exact package hints, define Markdown/Eleventy fallback roots, prune generated/dependency/Git trees and symlinks, fix Hugo leaf previews, and preserve optional per-site preview server bases.
+- Protect fenced and multi-backtick inline code from smart quotes. Preserve code-significant indentation in the loaded YAML/TOML body and use the same blank-line boundaries on save. Recognize blockquote space/tab prefixes by Markdown columns without turning indented fence-like text into a fence. Add integrated read/transform/save regressions and a shared synthetic fixture set with real PTY/CLI smoke; preserve preexisting test coverage. No version/tag/release/formula change.
 
 ### Improvements
 

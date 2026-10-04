@@ -56,7 +56,16 @@ Three-pane layout: posts table (left), metadata editor (top-right), content prev
 - Site switching and site-local YAML post templates
 - Property filters (AND logic) and batch frontmatter operations with confirmation/revert
 
-Batch operations currently write immediately, unlike ordinary unsaved metadata edits. Refresh, arbitrary body-byte fidelity, external-edit conflict checks, and batch/undo safety remain [follow-up work](docs/canonical-source-migration.md#deferred-safety-and-parity-work), not repairs delivered by consolidation. Use disposable copies or ordinary Git backups when exploring these paths.
+### File safety (current source)
+
+- All metadata, smart-quote, and batch changes are staged in memory until **Ctrl+S**. `r` refuses refresh while any post has unsaved metadata or body edits; repeated `r` or Esc never discards them. Save, or explicitly revert with `u`, before refreshing. Site switching/new-post reloads are likewise refused while dirty; an external editor requires the selected post to be clean.
+- Metadata-only saves retain the exact body bytes, including blank lines, CRLF, code, and missing final newline. The content pane remains a trimmed display projection for frontmatter posts; body transformations retain its original leading/trailing whitespace boundaries. A no-op save does not rewrite the file or add absent fields. Plain Markdown stays plain for body-only edits; adding metadata explicitly creates YAML frontmatter.
+- Saves compare current bytes and (on Unix) device/inode identity with the loaded baseline. Changed, deleted, replaced, or symlinked targets are refused visibly, retaining in-memory edits. Writes use unique exclusive temporary files, fsynced content, atomic rename, and current file permissions. This is **optimistic protection**, not a cross-process filesystem transaction: another writer can still race the final check/rename. Ownership, ACLs, extended attributes, and directory-fsync durability are not promised. Backups/version control remain appropriate.
+- `u` undoes the **last changing batch** in memory, before or after save. It restores only fields still equal to that batch's result; later edits to the same field, other fields, and body are retained. Undo after save stages an inverse edit requiring Ctrl+S. An unchanged batch preserves the previous undo. Save-all reports partial success/errors individually; failed posts stay dirty, and undo never writes external bytes. A clean refresh/site switch clears old batch undo. A newer changing batch replaces the single undo slot.
+- Smart quotes protect backtick/tilde fenced code (including unclosed fences) and matched equal-length multi-backtick inline spans. Normal prose still gets curly quotes, em dashes, and ellipses.
+- A frontmatter edit whose reconstructed metadata does not round-trip safely is refused rather than written. Complex formatting/permalink semantics are not a generic Markdown round-trip guarantee.
+
+Synthetic verification: `cargo test --locked` and the stdlib-only real PTY/CLI smoke in [tests/safety_smoke.py](tests/safety_smoke.py). Run `python3 tests/safety_smoke.py /absolute/path/to/textorium /new/receipt-directory`; it isolates HOME/config, creates disposable sites, and retains raw ANSI, cell projections, file readbacks, child exits, and a JSON summary. It never uses real articles or launches a browser/editor.
 
 ### Keyboard shortcuts
 
@@ -75,7 +84,7 @@ Batch operations currently write immediately, unlike ordinary unsaved metadata e
 | `Enter` | Edit field / open editor / add field |
 | `d` | Delete metadata field |
 | `Ctrl+S` | Save to disk |
-| `u` | Revert last batch, or current post when no batch revert is pending |
+| `u` | Undo last changing batch in memory, or revert current post when no batch undo is pending |
 | `s` | Cycle sort mode |
 | `f` | Toggle drafts filter |
 | `/` | Search |
@@ -128,11 +137,13 @@ textorium sites remove old-site  # Cannot remove the active site
 | SSG | Detection | Content directory | Frontmatter | Default dev port |
 |-----|-----------|-------------------|-------------|-----------------|
 | Hugo | `hugo.toml`, `hugo.yaml`, `config.toml` | `content/` | YAML, TOML | 1313 |
-| Jekyll | `_config.yml` | `_posts/` | YAML | 4000 |
-| Eleventy | `.eleventy.js`, `eleventy.config.js` | `posts/`, otherwise `src/` if present, otherwise `posts/` | YAML | 8080 |
-| Astro | `astro.config.mjs`, `astro.config.ts` | `src/content/` | YAML | 4321 |
+| Jekyll | `_config.yml` | `_posts/` **and** sibling `_drafts/` | YAML | 4000 |
+| Eleventy | `.eleventy.js/.cjs`, `eleventy.config.js/.cjs/.mjs`, or exact `@11ty/eleventy` package dependency | `posts/`, otherwise `src/`, otherwise site root | YAML | 8080 |
+| Astro | `astro.config.mjs/.ts/.js/.cjs`, or exact `astro` package dependency | `src/content/` | YAML | 4321 |
 
-Detection priority is Hugo → Jekyll → Eleventy → Astro, defaulting to Hugo when no marker matches. The scanner recursively reads Markdown in the configured content root; Hugo currently skips both `_index.md` and `index.md`. It does not automatically include Jekyll `_drafts/`. See the migration follow-ups for discovery and preview limitations.
+Explicit marker priority is Hugo → Jekyll → Eleventy → Astro; exact dependency/devDependency keys are consulted only when no marker matches. Unknown sites retain a Hugo-compatible registry type and use `content/` if present, otherwise the site root for Markdown fallback. The scanner includes Hugo leaf-bundle `index.md`, excluding branch `_index.md`; Jekyll's standard `_posts` root also includes `_drafts`. It never follows symlinks and prunes `.git`, `node_modules`, `vendor`, `target`, `dist`, `public`, `_site`, `_output`, `.next`, `.astro`, and `.textorium` directories at any depth. Eleventy config JavaScript is **not executed** to discover arbitrary custom input/output paths; set the site's `content_dir` in the JSON registry for nonconventional roots (standard ignored directory names remain pruned).
+
+Hugo leaf preview URLs point at the bundle directory rather than `/index/`. An optional per-site `server_url` in `~/.config/textorium/config.json` overrides the default preview base, e.g. `"server_url": "http://localhost:9123/custom/"`. This is a preview setting, not automatic dev-server port discovery. Other previews remain content-relative approximations: custom generator permalinks and Jekyll date/category routing are not inferred.
 
 ## Performance
 

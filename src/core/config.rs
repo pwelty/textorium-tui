@@ -10,6 +10,8 @@ pub struct SiteEntry {
     pub path: String,
     pub content_dir: String,
     pub ssg: SsgType,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub server_url: Option<String>,
 }
 
 /// On-disk multi-site config format.
@@ -31,6 +33,9 @@ pub struct Config {
     pub ssg: SsgType,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub editor: Option<String>,
+    /// Explicit preview server base, including an optional path prefix.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub server_url: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -63,6 +68,7 @@ impl Default for Config {
             content_dir: "content".to_string(),
             ssg: SsgType::Hugo,
             editor: None,
+            server_url: None,
         }
     }
 }
@@ -150,6 +156,7 @@ impl Config {
                             path: legacy.site_path.clone(),
                             content_dir: legacy.content_dir.clone(),
                             ssg: legacy.ssg.clone(),
+                            server_url: legacy.server_url.clone(),
                         }],
                         active_site: legacy.site_name.clone(),
                         editor: legacy.editor.clone(),
@@ -176,9 +183,15 @@ impl Config {
             path: self.site_path.clone(),
             content_dir: self.content_dir.clone(),
             ssg: self.ssg.clone(),
+            server_url: self.server_url.clone(),
         };
         if let Some(existing) = multi.sites.iter_mut().find(|s| s.name == self.site_name) {
+            let server_url = entry
+                .server_url
+                .clone()
+                .or_else(|| existing.server_url.clone());
             *existing = entry;
+            existing.server_url = server_url;
         } else {
             multi.sites.push(entry);
         }
@@ -197,23 +210,47 @@ impl Config {
         PathBuf::from(&self.site_path).join(&self.content_dir)
     }
 
+    /// Scanning roots, including Jekyll's sibling drafts for the standard posts root.
+    pub fn content_paths(&self) -> Vec<PathBuf> {
+        let mut roots = vec![self.content_path()];
+        if self.ssg == SsgType::Jekyll && self.content_dir == "_posts" {
+            roots.push(PathBuf::from(&self.site_path).join("_drafts"));
+        }
+        roots
+    }
+
     /// Get the preview URL for a post
     /// Constructs the URL by combining the SSG dev server URL with the post's relative path
     pub fn preview_url(&self, post_path: &Path) -> Option<String> {
         let content_path = self.content_path();
 
         // Get path relative to content directory (not site root)
-        let relative_path = post_path.strip_prefix(&content_path).ok()?;
+        let relative_path = self
+            .content_paths()
+            .iter()
+            .find_map(|root| post_path.strip_prefix(root).ok())
+            .or_else(|| post_path.strip_prefix(&content_path).ok())?;
 
         // Convert to URL path (remove .md extension, convert to forward slashes)
-        let url_path = relative_path
-            .with_extension("")
-            .to_string_lossy()
-            .replace('\\', "/");
+        let routed =
+            if self.ssg == SsgType::Hugo && relative_path.file_name()?.to_str()? == "index.md" {
+                relative_path.parent()?.to_path_buf()
+            } else {
+                relative_path.with_extension("")
+            };
+        let url_path = routed.to_string_lossy().replace('\\', "/");
 
         // Construct full URL with trailing slash for pretty URLs
-        let base_url = self.ssg.dev_server_url();
-        Some(format!("{}/{}/", base_url, url_path))
+        let base_url = self
+            .server_url
+            .as_deref()
+            .unwrap_or(self.ssg.dev_server_url())
+            .trim_end_matches('/');
+        Some(if url_path.is_empty() {
+            format!("{}/", base_url)
+        } else {
+            format!("{}/{}/", base_url, url_path)
+        })
     }
 }
 
@@ -235,16 +272,51 @@ fn detect_ssg(path: &str) -> SsgType {
     }
 
     // 11ty: has .eleventy.js or eleventy.config.js
-    if path.join(".eleventy.js").exists() || path.join("eleventy.config.js").exists() {
+    if [
+        ".eleventy.js",
+        ".eleventy.cjs",
+        "eleventy.config.js",
+        "eleventy.config.cjs",
+        "eleventy.config.mjs",
+    ]
+    .iter()
+    .any(|name| path.join(name).is_file())
+    {
         return SsgType::Eleventy;
     }
 
     // Astro: has astro.config.mjs or astro.config.ts
-    if path.join("astro.config.mjs").exists() || path.join("astro.config.ts").exists() {
+    if [
+        "astro.config.mjs",
+        "astro.config.ts",
+        "astro.config.js",
+        "astro.config.cjs",
+    ]
+    .iter()
+    .any(|name| path.join(name).is_file())
+    {
         return SsgType::Astro;
     }
 
-    // Default to Hugo
+    // Grounded hints: exact dependency keys, not arbitrary strings in scripts/prose.
+    if let Ok(package) = fs::read_to_string(path.join("package.json")) {
+        if let Ok(json) = serde_json::from_str::<serde_json::Value>(&package) {
+            let depends = |key: &str| {
+                ["dependencies", "devDependencies"].iter().any(|section| {
+                    json.get(section)
+                        .and_then(|v| v.as_object())
+                        .is_some_and(|map| map.contains_key(key))
+                })
+            };
+            if depends("@11ty/eleventy") {
+                return SsgType::Eleventy;
+            }
+            if depends("astro") {
+                return SsgType::Astro;
+            }
+        }
+    }
+    // Unknown sites retain the Hugo-compatible type, but use Markdown root fallback.
     SsgType::Hugo
 }
 
@@ -253,7 +325,16 @@ fn detect_content_dir(path: &str, ssg: &SsgType) -> String {
     let path = PathBuf::from(path);
 
     match ssg {
-        SsgType::Hugo => "content".to_string(),
+        SsgType::Hugo => {
+            let marked = ["hugo.toml", "hugo.yaml", "config.toml"]
+                .iter()
+                .any(|name| path.join(name).exists());
+            if marked || path.join("content").is_dir() {
+                "content".to_string()
+            } else {
+                ".".to_string()
+            }
+        }
         SsgType::Jekyll => "_posts".to_string(),
         SsgType::Eleventy => {
             if path.join("posts").exists() {
@@ -261,7 +342,7 @@ fn detect_content_dir(path: &str, ssg: &SsgType) -> String {
             } else if path.join("src").exists() {
                 "src".to_string()
             } else {
-                "posts".to_string() // 11ty common default
+                ".".to_string() // No conventional input directory: scan the site root.
             }
         }
         SsgType::Astro => "src/content".to_string(),
@@ -286,6 +367,7 @@ impl MultiSiteConfig {
             content_dir: entry.content_dir.clone(),
             ssg: entry.ssg.clone(),
             editor: self.editor.clone(),
+            server_url: entry.server_url.clone(),
         })
     }
 
@@ -336,6 +418,7 @@ impl MultiSiteConfig {
                 path: legacy.site_path,
                 content_dir: legacy.content_dir,
                 ssg: legacy.ssg,
+                server_url: legacy.server_url,
             }],
         })
     }
@@ -404,6 +487,7 @@ pub fn sites_add_to(
         path: path_str,
         content_dir,
         ssg,
+        server_url: None,
     });
 
     // If this is the first site, make it active
@@ -519,8 +603,13 @@ fn build_site_config(path: &str) -> Result<Config> {
         content_dir,
         ssg,
         editor: std::env::var("EDITOR").ok(),
+        server_url: None,
     })
 }
+
+#[cfg(test)]
+#[path = "config_safety_tests.rs"]
+mod safety_tests;
 
 #[cfg(test)]
 mod tests {
@@ -590,6 +679,7 @@ mod tests {
     #[test]
     fn test_detect_content_dir_hugo() {
         let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("hugo.toml"), "").unwrap();
         assert_eq!(
             detect_content_dir(&dir.path().to_string_lossy(), &SsgType::Hugo),
             "content"
@@ -630,7 +720,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         assert_eq!(
             detect_content_dir(&dir.path().to_string_lossy(), &SsgType::Eleventy),
-            "posts"
+            "."
         );
     }
 

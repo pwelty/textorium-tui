@@ -1,0 +1,137 @@
+[
+  {
+    "name": "hugo-leaf",
+    "marker": "hugo.toml",
+    "ssg": "hugo",
+    "root": "content",
+    "posts": [
+      "content/posts/leaf/index.md",
+      "content/posts/plain.md"
+    ],
+    "excluded": [
+      "content/_index.md",
+      "content/posts/_index.md"
+    ]
+  },
+  {
+    "name": "jekyll-drafts",
+    "marker": "_config.yml",
+    "ssg": "jekyll",
+    "root": "_posts",
+    "posts": [
+      "_posts/2026-01-01-post.md",
+      "_drafts/draft.md"
+    ]
+  },
+  {
+    "name": "astro-js",
+    "marker": "astro.config.js",
+    "ssg": "astro",
+    "root": "src/content",
+    "posts": [
+      "src/content/blog/post.md"
+    ]
+  },
+  {
+    "name": "astro-cjs",
+    "marker": "astro.config.cjs",
+    "ssg": "astro",
+    "root": "src/content",
+    "posts": [
+      "src/content/blog/post.md"
+    ]
+  },
+  {
+    "name": "astro-mjs",
+    "marker": "astro.config.mjs",
+    "ssg": "astro",
+    "root": "src/content",
+    "posts": [
+      "src/content/blog/post.md"
+    ]
+  },
+  {
+    "name": "astro-ts",
+    "marker": "astro.config.ts",
+    "ssg": "astro",
+    "root": "src/content",
+    "posts": [
+      "src/content/blog/post.md"
+    ]
+  },
+  {
+    "name": "astro-package",
+    "package": {
+      "devDependencies": {
+        "astro": "^5"
+      }
+    },
+    "ssg": "astro",
+    "root": "src/content",
+    "posts": [
+      "src/content/blog/post.md"
+    ]
+  },
+  {
+    "name": "eleventy-posts",
+    "marker": "eleventy.config.cjs",
+    "ssg": "11ty",
+    "root": "posts",
+    "posts": [
+      "posts/post.md"
+    ]
+  },
+  {
+    "name": "eleventy-src",
+    "marker": "eleventy.config.cjs",
+    "ssg": "11ty",
+    "root": "src",
+    "posts": [
+      "src/post.md"
+    ]
+  },
+  {
+    "name": "eleventy-.",
+    "marker": "eleventy.config.cjs",
+    "ssg": "11ty",
+    "root": ".",
+    "posts": [
+      "post.md"
+    ]
+  },
+  {
+    "name": "eleventy-package",
+    "package": {
+      "dependencies": {
+        "@11ty/eleventy": "^3"
+      }
+    },
+    "ssg": "11ty",
+    "root": ".",
+    "posts": [
+      "post.md"
+    ]
+  },
+  {
+    "name": "unknown-root",
+    "package": {
+      "scripts": {
+        "note": "astro is not a dependency"
+      }
+    },
+    "ssg": "hugo",
+    "root": ".",
+    "posts": [
+      "notes/post.md",
+      "index.md"
+    ]
+  },
+  {
+    "name": "unknown-content",
+    "ssg": "hugo",
+    "root": "content",
+    "posts": [
+      "content/post.md"
+    ]
+  }
+]

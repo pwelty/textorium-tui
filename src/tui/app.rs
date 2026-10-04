@@ -22,6 +22,10 @@ use crate::core::{
     templates,
 };
 
+type FieldMap = std::collections::HashMap<String, serde_json::Value>;
+// Before/after field snapshots only; undo never replaces bodies or loaded disk baselines.
+type BatchSnapshot = (FieldMap, FieldMap);
+
 pub struct App {
     config: Config,
     posts: Vec<Post>,
@@ -75,14 +79,11 @@ pub struct App {
     batch_confirm_prompt: String, // The confirmation message
     pending_batch_op: Option<BatchOp>, // Batch op waiting for confirmation
     batch_revert_paths: Vec<std::path::PathBuf>, // Paths modified by last batch op (for undo)
-    batch_snapshots: std::collections::HashMap<
-        std::path::PathBuf,
-        (std::collections::HashMap<String, serde_json::Value>, String),
-    >, // pre-batch snapshots: path → (frontmatter, raw)
-    batch_input_mode: bool,       // True when collecting extra input for batch op
-    batch_input_prompt: String,   // Prompt for batch input
-    batch_input_buffer: String,   // Input buffer for batch op arguments
-    batch_input_field: String,    // Field name for batch op (set value / add field / remove)
+    batch_snapshots: std::collections::HashMap<std::path::PathBuf, BatchSnapshot>,
+    batch_input_mode: bool, // True when collecting extra input for batch op
+    batch_input_prompt: String, // Prompt for batch input
+    batch_input_buffer: String, // Input buffer for batch op arguments
+    batch_input_field: String, // Field name for batch op (set value / add field / remove)
     batch_input_step: BatchInputStep, // Step within multi-step batch input
 }
 
@@ -408,6 +409,11 @@ impl App {
     fn open_in_editor(&self) -> Result<()> {
         let filtered = self.get_filtered_posts();
         if let Some(post) = filtered.get(self.selected) {
+            if Self::is_dirty(post) {
+                anyhow::bail!(
+                    "Unsaved edits retained; save or revert before opening external editor"
+                );
+            }
             // Get editor from config or environment
             let editor = if let Some(ref e) = self.config.editor {
                 e.clone()
@@ -442,6 +448,33 @@ impl App {
         Ok(())
     }
 
+    fn refresh_posts(&mut self) {
+        if self.dirty_count() > 0 {
+            self.status_message =
+                "✗ Refresh refused: unsaved edits retained; Ctrl+S to save or u to revert"
+                    .to_string();
+            return;
+        }
+        match scan_posts(&self.config) {
+            Ok(result) => {
+                let errors = result.errors.len();
+                self.posts = result.posts;
+                self.batch_revert_paths.clear();
+                self.batch_snapshots.clear();
+                self.selected_posts.clear();
+                self.invalidate_filter();
+                self.invalidate_visual_lines();
+                self.ensure_filtered();
+                self.set_selected(
+                    self.selected
+                        .min(self.filtered_indices.len().saturating_sub(1)),
+                );
+                self.status_message = format!("✓ Refreshed ({} files skipped)", errors);
+            }
+            Err(e) => self.status_message = format!("✗ Refresh failed: {}", e),
+        }
+    }
+
     fn save_all(&mut self) {
         let dirty_paths: Vec<std::path::PathBuf> = self
             .posts
@@ -459,14 +492,19 @@ impl App {
             for path in &dirty_paths {
                 if let Some(post) = self.posts.iter_mut().find(|p| &p.path == path) {
                     match save_post(post) {
-                        Ok(_) => {
-                            if let Ok(reloaded) = read_post(&post.path) {
-                                post.original_frontmatter = reloaded.original_frontmatter;
-                                post.original_content = reloaded.original_content;
-                                post.raw_frontmatter = reloaded.raw_frontmatter;
+                        Ok(_) => match read_post(&post.path) {
+                            Ok(reloaded) => {
+                                *post = reloaded;
+                                saved += 1;
                             }
-                            saved += 1;
-                        }
+                            Err(e) => {
+                                errors += 1;
+                                first_error.get_or_insert(format!(
+                                    "Saved bytes but could not reload baseline: {}",
+                                    e
+                                ));
+                            }
+                        },
                         Err(e) if first_error.is_none() => {
                             first_error = Some(format!("{}", e));
                             errors += 1;
@@ -556,16 +594,13 @@ impl App {
     fn apply_batch_op(&mut self, op: &BatchOp) {
         let selected_paths: Vec<std::path::PathBuf> = self.selected_posts.iter().cloned().collect();
         let mut modified_paths = Vec::new();
-        let mut errors = 0usize;
-        let mut first_error: Option<String> = None;
-
         // Take snapshots before modifying
         let mut snapshots = std::collections::HashMap::new();
         for path in &selected_paths {
             if let Some(post) = self.posts.iter().find(|p| &p.path == path) {
                 snapshots.insert(
                     path.clone(),
-                    (post.frontmatter.clone(), post.raw_frontmatter.clone()),
+                    (post.frontmatter.clone(), post.frontmatter.clone()),
                 );
             }
         }
@@ -607,41 +642,36 @@ impl App {
             }
         }
 
-        // Save all modified posts
-        let mut saved = 0usize;
-        for path in &modified_paths {
-            if let Some(post) = self.posts.iter_mut().find(|p| &p.path == path) {
-                match save_post(post) {
-                    Ok(_) => {
-                        if let Ok(reloaded) = read_post(&post.path) {
-                            post.original_frontmatter = reloaded.original_frontmatter;
-                            post.original_content = reloaded.original_content;
-                            post.raw_frontmatter = reloaded.raw_frontmatter;
-                        }
-                        saved += 1;
-                    }
-                    Err(e) if first_error.is_none() => {
-                        first_error = Some(format!("{}", e));
-                        errors += 1;
-                    }
-                    Err(_) => {
-                        errors += 1;
-                    }
+        modified_paths.retain(|path| {
+            self.posts
+                .iter()
+                .find(|p| &p.path == path)
+                .is_some_and(|post| {
+                    snapshots
+                        .get(path)
+                        .is_some_and(|snapshot| post.frontmatter != snapshot.0)
+                })
+        });
+        if modified_paths.is_empty() {
+            self.status_message = "Batch: no changes staged".to_string();
+            self.selected_posts.clear();
+            return;
+        }
+        self.batch_revert_paths = modified_paths;
+        // Store the result too: undo touches only batch-owned fields, not later edits/body.
+        for path in &self.batch_revert_paths {
+            if let Some(post) = self.posts.iter().find(|p| &p.path == path) {
+                if let Some(snapshot) = snapshots.get_mut(path) {
+                    snapshot.1 = post.frontmatter.clone();
                 }
             }
         }
-
-        self.batch_revert_paths = modified_paths;
         self.batch_snapshots = snapshots;
         self.invalidate_filter();
-
-        if errors > 0 {
-            let err = first_error.as_deref().unwrap_or("unknown");
-            self.status_message =
-                format!("Batch: {} saved, {} errors (first: {})", saved, errors, err);
-        } else {
-            self.status_message = format!("✓ Batch: {} modified (u to revert)", saved);
-        }
+        self.status_message = format!(
+            "✓ Batch: {} staged; Ctrl+S to save (u to undo)",
+            self.batch_revert_paths.len()
+        );
         self.selected_posts.clear();
     }
 
@@ -654,30 +684,39 @@ impl App {
 
         let paths = std::mem::take(&mut self.batch_revert_paths);
         let snapshots = std::mem::take(&mut self.batch_snapshots);
-        let mut reverted = 0usize;
+        let mut restored = 0usize;
+        let mut retained = 0usize;
 
         for path in &paths {
             if let Some(post) = self.posts.iter_mut().find(|p| &p.path == path) {
-                if let Some((snap_fm, snap_raw)) = snapshots.get(path) {
-                    post.frontmatter = snap_fm.clone();
-                    post.raw_frontmatter = snap_raw.clone();
-                    post.sync_fields_from_frontmatter();
-                    // Save reverted state to disk
-                    if save_post(post).is_ok() {
-                        // Reload to sync originals
-                        if let Ok(reloaded) = read_post(&post.path) {
-                            post.original_frontmatter = reloaded.original_frontmatter;
-                            post.original_content = reloaded.original_content;
-                            post.raw_frontmatter = reloaded.raw_frontmatter;
+                if let Some((before, after)) = snapshots.get(path) {
+                    let keys: std::collections::HashSet<_> =
+                        before.keys().chain(after.keys()).collect();
+                    for key in keys {
+                        if before.get(key) == after.get(key) {
+                            continue;
                         }
-                        reverted += 1;
+                        if post.frontmatter.get(key) == after.get(key) {
+                            match before.get(key) {
+                                Some(value) => {
+                                    post.frontmatter.insert(key.clone(), value.clone());
+                                }
+                                None => {
+                                    post.frontmatter.remove(key);
+                                }
+                            }
+                            restored += 1;
+                        } else {
+                            retained += 1;
+                        }
                     }
+                    post.sync_fields_from_frontmatter();
                 }
             }
         }
 
         self.invalidate_filter();
-        self.status_message = format!("✓ Reverted {} batch-modified post(s)", reverted);
+        self.status_message = format!("✓ Batch undo: {} field(s) restored in memory; {} later edit(s) retained; Ctrl+S to save", restored, retained);
     }
 
     /// Create a new post with optional template and reload the posts list.
@@ -1772,6 +1811,9 @@ pub fn run() -> Result<()> {
                                             match scan_posts(&app.config) {
                                                 Ok(result) => {
                                                     app.posts = result.posts;
+                                                    app.batch_revert_paths.clear();
+                                                    app.batch_snapshots.clear();
+                                                    app.selected_posts.clear();
                                                     app.invalidate_filter();
                                                     app.set_selected(0);
                                                     app.template_names =
@@ -1880,8 +1922,10 @@ pub fn run() -> Result<()> {
                                         let n = app.selected_posts.len();
                                         app.batch_input_mode = false;
                                         app.batch_confirm_mode = true;
-                                        app.batch_confirm_prompt =
-                                            format!("Remove field '{}' from {} post(s)?", key, n);
+                                        app.batch_confirm_prompt = format!(
+                                            "Stage removal of '{}' from {} post(s)?",
+                                            key, n
+                                        );
                                         app.pending_batch_op = Some(BatchOp::RemoveField { key });
                                     }
                                     _ => {}
@@ -1896,7 +1940,7 @@ pub fn run() -> Result<()> {
                                 match app.batch_menu_idx {
                                     0 => {
                                         app.batch_confirm_prompt = format!(
-                                            "Add field '{}' = '{}' to {} post(s)?",
+                                            "Stage adding '{}' = '{}' to {} post(s)?",
                                             key, value, n
                                         );
                                         app.pending_batch_op =
@@ -1904,7 +1948,7 @@ pub fn run() -> Result<()> {
                                     }
                                     _ => {
                                         app.batch_confirm_prompt = format!(
-                                            "Set '{}' to '{}' on {} post(s)?",
+                                            "Stage setting '{}' to '{}' on {} post(s)?",
                                             key, value, n
                                         );
                                         app.pending_batch_op =
@@ -1947,7 +1991,7 @@ pub fn run() -> Result<()> {
                                 let n = app.selected_posts.len();
                                 app.batch_confirm_mode = true;
                                 app.batch_confirm_prompt =
-                                    format!("Toggle draft on {} post(s)?", n);
+                                    format!("Stage draft toggle on {} post(s)?", n);
                                 app.pending_batch_op = Some(BatchOp::ToggleDraft);
                             }
                             _ => {
@@ -2264,25 +2308,7 @@ pub fn run() -> Result<()> {
                     }
                     KeyCode::Char('s') => app.cycle_sort(),
                     KeyCode::Char('f') => app.toggle_drafts(),
-                    KeyCode::Char('r') => {
-                        let result = scan_posts(&app.config)?;
-                        let err_count = result.errors.len();
-                        app.posts = result.posts;
-                        app.invalidate_filter();
-                        app.ensure_filtered();
-                        let max = app.filtered_indices.len().saturating_sub(1);
-                        if app.selected > max {
-                            app.set_selected(max);
-                        }
-                        app.status_message = if err_count > 0 {
-                            format!(
-                                "✓ Refreshed ({} files skipped due to parse errors)",
-                                err_count
-                            )
-                        } else {
-                            "✓ Refreshed".to_string()
-                        };
-                    }
+                    KeyCode::Char('r') => app.refresh_posts(),
                     KeyCode::Char('u') => {
                         if !app.batch_revert_paths.is_empty() {
                             app.revert_batch();
@@ -2333,6 +2359,10 @@ pub fn run() -> Result<()> {
                         app.set_selected(0);
                         app.status_message = format!("✓ Cleared {} filter(s)", n);
                     }
+                    KeyCode::Char('S') if app.dirty_count() > 0 => {
+                        app.status_message =
+                            "Unsaved edits retained; save or revert first".to_string();
+                    }
                     KeyCode::Char('S') => {
                         // Open site picker
                         app.site_entries =
@@ -2344,6 +2374,10 @@ pub fn run() -> Result<()> {
                             .position(|s| s.name == app.config.site_name)
                             .unwrap_or(0);
                         app.show_site_picker = true;
+                    }
+                    KeyCode::Char('n') if app.dirty_count() > 0 => {
+                        app.status_message =
+                            "Unsaved edits retained; save or revert first".to_string();
                     }
                     KeyCode::Char('n') => {
                         // Create new post — prompt for template if any exist
@@ -2449,6 +2483,7 @@ mod tests {
     use std::io::Write;
     use std::path::PathBuf;
     use tempfile::NamedTempFile;
+    include!("app_safety_tests.rs");
 
     fn make_post(
         title: &str,
@@ -2478,6 +2513,8 @@ mod tests {
             raw_frontmatter: String::new(),
             original_frontmatter: fm,
             original_content: content.to_string(),
+            original_source: None,
+            original_identity: None,
             format: crate::core::posts::FrontmatterFormat::default(),
         }
     }

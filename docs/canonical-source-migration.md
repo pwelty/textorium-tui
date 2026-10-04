@@ -40,7 +40,9 @@ Private-repository retirement and its documentation/automation changes belong to
 
 ## Deferred safety and parity work
 
-The earlier source audit identified follow-ups, not repairs delivered by this migration:
+**Current-source supersession:** the bounded safety/discovery pass tracked in [#133](https://github.com/pwelty/textorium-tui/issues/133) implements the first six items below. See [README file safety](../README.md#file-safety-current-source) for the precise contract and residual concurrency/discovery/preview limits. The original consolidation and July test mapping above remain historical records; saved views and template interoperability remain excluded.
+
+The earlier source audit identified follow-ups, not repairs delivered by the original consolidation:
 
 - Refresh can discard unsaved edits ([#125](https://github.com/pwelty/textorium-tui/issues/125)).
 - Frontmatter parsing trims bodies and saving reconstructs whitespace; metadata-only edits are not generally byte-preserving.
