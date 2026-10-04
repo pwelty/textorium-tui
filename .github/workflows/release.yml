@@ -29,7 +29,7 @@ jobs:
           targets: ${{ matrix.target }}
 
       - name: Build release binary
-        run: cargo build --release --target ${{ matrix.target }}
+        run: cargo build --release --locked --target ${{ matrix.target }}
 
       - name: Create tarball
         run: |
@@ -74,8 +74,8 @@ jobs:
         id: sha
         run: |
           BASE="https://github.com/pwelty/textorium-tui/releases/download/${TAG}"
-          curl -sL "${BASE}/textorium-${TAG}-aarch64-apple-darwin.tar.gz" -o arm64.tar.gz
-          curl -sL "${BASE}/textorium-${TAG}-x86_64-apple-darwin.tar.gz" -o x86_64.tar.gz
+          curl --fail --show-error --location --retry 3 "${BASE}/textorium-${TAG}-aarch64-apple-darwin.tar.gz" -o arm64.tar.gz
+          curl --fail --show-error --location --retry 3 "${BASE}/textorium-${TAG}-x86_64-apple-darwin.tar.gz" -o x86_64.tar.gz
           echo "arm64=$(sha256sum arm64.tar.gz | awk '{print $1}')" >> "$GITHUB_OUTPUT"
           echo "x86_64=$(sha256sum x86_64.tar.gz | awk '{print $1}')" >> "$GITHUB_OUTPUT"
 

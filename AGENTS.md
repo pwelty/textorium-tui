@@ -6,7 +6,7 @@ Read [MEMORY.md](MEMORY.md) before project work. This public repository (`pwelty
 
 [Canonical-source migration](docs/canonical-source-migration.md) records synthetic coverage, provenance, exclusions, and deferred work. Store durable shared project rules in MEMORY.md, not chat or tool-specific auto-memory. Do not record secrets, raw environment values, private prose, transient progress, or test-output dumps.
 
-Distribution: `brew install pwelty/tap/textorium` (`pwelty/homebrew-tap`). The published v1.0.2 release is distinct from newer source; package version alone does not establish feature availability.
+Distribution: `brew install pwelty/tap/textorium` (`pwelty/homebrew-tap`). Version 1.1.0 packages the accumulated features and safety/discovery pass. Verify published release assets and formula state separately; a source version alone is not publication.
 
 ## Architecture
 
@@ -33,7 +33,7 @@ src/
 
 Three-pane posts table, metadata editor, and content preview; search across title/content/categories/tags; sorting, draft and property filters; YAML/TOML frontmatter; smart quotes; external editor; per-post revert; save-all; browser preview; templates; site switching; and batch frontmatter operations.
 
-CLI commands: `use`, `new`, `list`, `publish`, `templates`, `sites`, `serve`, `build`. There is no `idea`/Notion command. April Astro/templates/sites/filters/batch features are already implemented in source, not newly delivered by this migration or included in the March v1.0.2 release.
+CLI commands: `use`, `new`, `list`, `publish`, `templates`, `sites`, `serve`, `build`. There is no `idea`/Notion command. Version 1.1.0 includes the Astro/templates/sites/filters/batch features that were not in v1.0.2.
 
 ## Build and verify
 

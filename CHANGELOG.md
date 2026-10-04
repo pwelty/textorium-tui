@@ -2,11 +2,11 @@
 
 All notable changes to Textorium TUI are documented here.
 
-## [Unreleased]
+## [1.1.0] — 2026-10-04
 
-These changes are in source after the v1.0.2 release, not yet distributed by that release. This section does not assign a new release version.
+First release of the accumulated source features and the bounded safety/discovery fixes since v1.0.2.
 
-### Features already implemented in April 2026
+### Features
 
 - Astro detection, content creation, dev server, and build support (#126)
 - Site-local YAML post templates and CLI management (#127)
@@ -21,7 +21,7 @@ These changes are in source after the v1.0.2 release, not yet distributed by tha
 - Refuse changed/deleted/replaced/symlinked files using loaded bytes and Unix identity. Use exclusive unique temp files, preserve file permissions, and recheck before atomic replacement (optimistic, not transactional).
 - Stage batch edits until Ctrl+S. Undo before/after save is in-memory and field-owned; preserve later edits/body and report partial save errors.
 - Include Hugo leaf bundles and Jekyll drafts; extend Astro/Eleventy markers and exact package hints, define Markdown/Eleventy fallback roots, prune generated/dependency/Git trees and symlinks, fix Hugo leaf previews, and preserve optional per-site preview server bases.
-- Protect fenced and multi-backtick inline code from smart quotes. Preserve code-significant indentation in the loaded YAML/TOML body and use the same blank-line boundaries on save. Recognize blockquote space/tab prefixes by Markdown columns without turning indented fence-like text into a fence. Add integrated read/transform/save regressions and a shared synthetic fixture set with real PTY/CLI smoke; preserve preexisting test coverage. No version/tag/release/formula change.
+- Protect fenced and multi-backtick inline code from smart quotes. Preserve code-significant indentation in the loaded YAML/TOML body and use the same blank-line boundaries on save. Recognize blockquote space/tab prefixes by Markdown columns without turning indented fence-like text into a fence. Add integrated read/transform/save regressions and a shared synthetic fixture set with real PTY/CLI smoke; preserve preexisting test coverage.
 
 ### Improvements
 
@@ -32,7 +32,8 @@ These changes are in source after the v1.0.2 release, not yet distributed by tha
 
 - Declare this repository the sole maintained Rust TUI/Homebrew source; map all 15 private July synthetic core tests, port seven missing cases, and strengthen existing no-frontmatter coverage (#131)
 - Reconcile contributor/source-build documentation, remove stale Notion-command claims, and correct the native companion link without pricing claims
-- Record parser replacement as deliberately not transferred and safety/discovery/parity work as deferred in [the migration document](docs/canonical-source-migration.md); no production behavior, dependency, version, or release changes
+- Preserve the original consolidation scope and parser decision in [the migration document](docs/canonical-source-migration.md); this release also includes the subsequently completed safety/discovery pass.
+- Build release binaries with the committed lockfile and fail asset downloads on HTTP errors before updating Homebrew.
 
 ## [1.0.2] — 2026-03-28
 
