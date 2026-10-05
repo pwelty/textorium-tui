@@ -27,9 +27,15 @@ Pushing `vX.Y.Z` triggers `.github/workflows/release.yml`. It:
 
 - builds locked Apple Silicon and Intel macOS binaries;
 - publishes both tarballs as GitHub Release assets;
-- downloads those assets, computes SHA256, and **automatically updates** `pwelty/homebrew-tap/Formula/textorium.rb` using `HOMEBREW_TAP_TOKEN`.
+- downloads those assets, computes SHA256, and **automatically updates** `pwelty/homebrew-tap/Formula/textorium.rb` using the repository-scoped `HOMEBREW_TAP_SSH_KEY` deploy key.
 
 Tagging is therefore authority to publish both binaries and the Homebrew update—not merely to start a build. Inspect the workflow and tap credential readiness before tagging. Never run a competing formula updater while that job is active.
+
+### Credential preflight (no release)
+
+Run `gh workflow run release.yml --ref main`. Manual dispatch runs **only** `verify-tap-access`: it checks out the tap with the same SSH key as the updater, creates a uniquely named temporary branch at the existing tap HEAD, verifies it, and deletes it with an exact-head lease. Build, release, and formula-update jobs are skipped. Read the run result and verify probe-branch absence; do not infer write access from a successful public clone alone.
+
+The deploy key is restricted to `pwelty/homebrew-tap`, with write access, not attached to a personal account. Recovery custody is in Skopos's dedicated vault under `Textorium TUI — Homebrew tap deploy key`. The Actions secret contains only that private key, never a vault token. Deploy keys do not expire; rotate/revoke the exact key and secret when required. Preserve strict SSH host checking and never export key material to logs or Git.
 
 ## Verify distribution
 
@@ -44,11 +50,11 @@ Tagging is therefore authority to publish both binaries and the Homebrew update�
 
 Treat binary publication and tap update as separate outcomes. A failed final job does not mean the binaries failed or should be republished.
 
-If tap checkout reports `Bad credentials`, record the error without exporting secrets. Do not copy an interactive OAuth token into Actions. Credential existence is not proof of validity. Track authorized credential repair separately; see [#136](https://github.com/pwelty/textorium-tui/issues/136).
+If tap checkout reports an authentication error, record it without exporting secrets. Do not copy an interactive OAuth token into Actions. Credential existence is not proof of validity. Recover or rotate the dedicated deploy key through its authorized custody, then run the manual credential preflight. The rejected token was replaced by this mechanism in [#136](https://github.com/pwelty/textorium-tui/issues/136).
 
 After confirming the automatic job has stopped, a manual tap PR through authorized GitHub access can recover distribution: change only version, asset URLs, hashes, and version-test expectation, then verify the published formula and an isolated install. Preserve the failed job as evidence; do not describe manual recovery as repaired automation.
 
-Do not blindly rerun an old release after manual recovery. The workflow's unconditional formula commit may fail when there is no diff, and future reruns must not replace qualified artifacts or regress the formula.
+An already-current formula is a successful no-op: the updater skips commit/push when the staged formula has no diff. Do not blindly rerun an old release after manual recovery, because it can still republish assets or regress the formula. Use the manual credential preflight instead.
 
 ## Cleanup
 
