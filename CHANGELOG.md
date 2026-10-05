@@ -2,6 +2,14 @@
 
 All notable changes to Textorium TUI are documented here.
 
+## [Unreleased]
+
+- Add comma configuration view with active site/path, editor and config location, scrollable setup guidance, and external edit/reload (#139).
+- Resolve editors as config → VISUAL → EDITOR → nano; support literal quoted arguments without a shell and restore the TUI after failed launches/nonzero exits. Share the launcher with post editing and CLI new.
+- Retain unsaved posts and previous working config on invalid reload; create only a path-free first-edit config scaffold, preserve externally edited JSON/unknown fields, and keep malformed startup config recoverable.
+- Make configuration/help discoverable in narrow footers and distinguish valid empty collections from missing roots/content. CLI list now fails with stderr/no stdout for missing paths, including JSON mode.
+- Add focused Rust and synthetic real PTY/CLI config regressions; no version or release change.
+
 ## [1.1.0] — 2026-10-04
 
 First release of the accumulated source features and the bounded safety/discovery fixes since v1.0.2.

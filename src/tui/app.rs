@@ -1,3 +1,4 @@
+use crate::core::editor;
 use crate::core::filters::{FilterOp, PropertyFilter};
 use anyhow::Result;
 use crossterm::{
@@ -14,7 +15,6 @@ use ratatui::{
     Frame, Terminal,
 };
 use std::io;
-use std::process::Command;
 
 use crate::core::{
     config::{Config, MultiSiteConfig, SiteEntry},
@@ -40,19 +40,22 @@ pub struct App {
     search_mode: bool,
     sort_mode: SortMode,
     drafts_only: bool,
-    edit_mode: bool,                      // Whether we're editing a metadata field
-    edit_buffer: String,                  // Buffer for editing metadata values
-    status_message: String,               // Status bar message
-    adding_field: bool,                   // Whether we're adding a new field
-    new_field_key: String,                // Key name for new field being added
-    quit_pending: bool,                   // True after first 'q' press with unsaved changes
-    filtered_indices: Vec<usize>,         // Cached indices into self.posts after filter+sort
-    filter_dirty: bool,                   // True when filtered_indices needs recomputation
-    show_help: bool,                      // Whether the help overlay is visible
-    cached_dirty_count: usize,            // Cached count of posts with unsaved changes
+    edit_mode: bool,              // Whether we're editing a metadata field
+    edit_buffer: String,          // Buffer for editing metadata values
+    status_message: String,       // Status bar message
+    adding_field: bool,           // Whether we're adding a new field
+    new_field_key: String,        // Key name for new field being added
+    quit_pending: bool,           // True after first 'q' press with unsaved changes
+    filtered_indices: Vec<usize>, // Cached indices into self.posts after filter+sort
+    filter_dirty: bool,           // True when filtered_indices needs recomputation
+    show_help: bool,              // Whether the help overlay is visible
+    show_config: bool,
+    config_scroll: u16,
+    config_notice: String,
+    cached_dirty_count: usize, // Cached count of posts with unsaved changes
     cached_visual_lines: usize, // Cached visual line count for current post at current width
     visual_lines_post_idx: Option<usize>, // Which post index the cached visual lines are for
-    visual_lines_width: u16,    // Width used for cached visual lines computation
+    visual_lines_width: u16,   // Width used for cached visual lines computation
     // Template picker overlay state
     show_template_picker: bool,
     template_names: Vec<String>, // Available template names
@@ -131,10 +134,26 @@ enum SortMode {
 
 impl App {
     pub fn new() -> Result<Self> {
-        let config = Config::load()?;
-        let ScanResult { posts, errors } = scan_posts(&config)?;
+        // Keep malformed configuration recoverable from inside the TUI.
+        let (config, config_notice) = match Config::load() {
+            Ok(config) => (config, String::new()),
+            Err(error) => (
+                Config::default(),
+                format!("Configuration invalid: {error:#}"),
+            ),
+        };
+        let ScanResult { posts, errors } = if config.validate_paths().is_ok() {
+            scan_posts(&config)?
+        } else {
+            ScanResult {
+                posts: Vec::new(),
+                errors: Vec::new(),
+            }
+        };
 
-        let status_message = if errors.is_empty() {
+        let status_message = if !config_notice.is_empty() {
+            "Configuration invalid; press , to edit, ? for help".to_string()
+        } else if errors.is_empty() {
             String::new()
         } else {
             format!(
@@ -166,6 +185,7 @@ impl App {
             drafts_only: false,
             edit_mode: false,
             edit_buffer: String::new(),
+            config_notice,
             status_message,
             adding_field: false,
             new_field_key: String::new(),
@@ -173,6 +193,8 @@ impl App {
             filtered_indices: Vec::new(),
             filter_dirty: true,
             show_help: false,
+            show_config: false,
+            config_scroll: 0,
             cached_dirty_count: 0,
             cached_visual_lines: 0,
             visual_lines_post_idx: None,
@@ -382,27 +404,16 @@ impl App {
         if !self.posts.is_empty() {
             return None;
         }
-
-        if self.config.site_path.is_empty() {
-            return Some("No site configured. Run: textorium use <path>".to_string());
+        let recovery = "Press , for config; ? for help.";
+        if !self.config_notice.is_empty() && self.config.site_path.is_empty() {
+            return Some(format!("{recovery}\n{}", self.config_notice));
         }
-
-        let site_path = std::path::Path::new(&self.config.site_path);
-        if !site_path.exists() {
-            return Some(format!("Site path not found: {}", self.config.site_path));
+        if let Err(error) = self.config.validate_paths() {
+            return Some(format!("{recovery}\n{error}"));
         }
-
-        let content_path = self.config.content_path();
-        if !content_path.exists() {
-            return Some(format!(
-                "Content directory not found: {}",
-                content_path.display()
-            ));
-        }
-
         Some(format!(
-            "No markdown files found in {}",
-            content_path.display()
+            "{recovery}\nValid empty site: no markdown files in {}",
+            self.config.content_path().display()
         ))
     }
 
@@ -414,37 +425,62 @@ impl App {
                     "Unsaved edits retained; save or revert before opening external editor"
                 );
             }
-            // Get editor from config or environment
-            let editor = if let Some(ref e) = self.config.editor {
-                e.clone()
-            } else if let Ok(e) = std::env::var("EDITOR") {
-                e
-            } else {
-                "nano".to_string()
-            };
-
-            // Completely restore terminal
-            disable_raw_mode()?;
-            execute!(
-                io::stdout(),
-                LeaveAlternateScreen,
-                DisableMouseCapture,
-                crossterm::cursor::Show
-            )?;
-
-            // Open editor with proper terminal control
-            let status = Command::new(&editor).arg(&post.path).status()?;
-
-            // Re-enter TUI mode
-            enable_raw_mode()?;
-            execute!(io::stdout(), EnterAlternateScreen, EnableMouseCapture)?;
-
-            if status.success() {
-                return Ok(());
-            } else {
-                anyhow::bail!("Editor exited with error");
-            }
+            open_external_editor(self.config.editor.as_deref(), &post.path)?;
         }
+        Ok(())
+    }
+
+    fn config_change_allowed(&mut self) -> Result<()> {
+        if self.dirty_count() > 0 {
+            anyhow::bail!(
+                "Unsaved edits retained; Ctrl+S to save or u to revert before config edit/reload"
+            );
+        }
+        Ok(())
+    }
+
+    fn edit_configuration(&mut self) -> Result<()> {
+        self.config_change_allowed()?;
+        let path = Config::config_path()?;
+        // Parse before creating a scaffold or suspending the terminal.
+        editor::arguments(&editor::preferred(self.config.editor.as_deref()))?;
+        Config::ensure_editable_file(&path)?;
+        open_external_editor(self.config.editor.as_deref(), &path)?;
+        self.reload_configuration(&path)
+    }
+
+    fn reload_configuration(&mut self, path: &std::path::Path) -> Result<()> {
+        self.config_change_allowed()?;
+        if !path.is_file() {
+            anyhow::bail!("Config file missing; press e to recreate and edit");
+        }
+        let multi = MultiSiteConfig::load_from_file(path)?;
+        let candidate = multi.active_config()?;
+        candidate.validate_paths()?;
+        let result = scan_posts(&candidate)?;
+        // All fallible candidate work completes before replacing working state.
+        let site_entries = multi.sites;
+        let template_names = templates::list_templates(&candidate)?;
+        self.config = candidate;
+        self.posts = result.posts;
+        self.site_entries = site_entries;
+        self.template_names = template_names;
+        self.selected_posts.clear();
+        self.batch_revert_paths.clear();
+        self.batch_snapshots.clear();
+        self.search_query.clear();
+        self.property_filters.clear();
+        self.drafts_only = false;
+        self.quit_pending = false;
+        self.invalidate_filter();
+        self.ensure_filtered();
+        self.set_selected(0);
+        self.config_notice = format!(
+            "Configuration reloaded: {} posts ({} skipped)",
+            self.posts.len(),
+            result.errors.len()
+        );
+        self.status_message = self.config_notice.clone();
         Ok(())
     }
 
@@ -774,6 +810,56 @@ impl App {
     }
 }
 
+// Always attempt each restoration step, including after spawn/exit/suspend failure.
+fn resume_terminal() -> Result<()> {
+    let raw = enable_raw_mode();
+    let screen = execute!(
+        io::stdout(),
+        EnterAlternateScreen,
+        EnableMouseCapture,
+        crossterm::cursor::Hide
+    );
+    raw?;
+    screen?;
+    Ok(())
+}
+
+fn open_external_editor(configured: Option<&str>, path: &std::path::Path) -> Result<()> {
+    let args = editor::arguments(&editor::preferred(configured))?;
+    let result = (|| {
+        disable_raw_mode()?;
+        execute!(
+            io::stdout(),
+            LeaveAlternateScreen,
+            DisableMouseCapture,
+            crossterm::cursor::Show
+        )?;
+        editor::run(&args, path)
+    })();
+    let restored = resume_terminal();
+    match (result, restored) {
+        (Err(error), Err(restore)) => Err(anyhow::anyhow!(
+            "{error:#}; terminal restore failed: {restore:#}"
+        )),
+        (Err(error), _) => Err(error),
+        (_, Err(error)) => Err(error),
+        _ => Ok(()),
+    }
+}
+
+struct TerminalCleanup;
+impl Drop for TerminalCleanup {
+    fn drop(&mut self) {
+        let _ = disable_raw_mode();
+        let _ = execute!(
+            io::stdout(),
+            LeaveAlternateScreen,
+            DisableMouseCapture,
+            crossterm::cursor::Show
+        );
+    }
+}
+
 fn ui(f: &mut Frame, app: &mut App) {
     // Main layout with status bar at bottom
     let main_chunks = Layout::default()
@@ -800,6 +886,8 @@ fn ui(f: &mut Frame, app: &mut App) {
         let empty_message = if is_empty {
             if !app.search_query.is_empty() {
                 format!("No posts match \"{}\"", app.search_query)
+            } else if !app.property_filters.is_empty() {
+                "No posts match property filters; x: clear filters".to_string()
             } else if app.drafts_only {
                 "No draft posts found".to_string()
             } else {
@@ -1135,7 +1223,8 @@ fn ui(f: &mut Frame, app: &mut App) {
             format!("q: quit | j/k/↑↓: nav | Tab: panes | Ctrl+S: save | n:new | s:sort | f:drafts | /:search | b:batch | o:prev | ?:help{}{}{}", dirty_suffix, filter_hint, selection_suffix)
         }
     };
-    let status_bar = Paragraph::new(status_text).style(Style::default().fg(Color::Gray));
+    let status_bar = Paragraph::new(format!(",:config ?:help | {status_text}"))
+        .style(Style::default().fg(Color::Gray));
     f.render_widget(status_bar, main_chunks[1]);
 
     // New post title prompt overlay
@@ -1526,6 +1615,41 @@ fn ui(f: &mut Frame, app: &mut App) {
         f.render_widget(para, overlay_area);
     }
 
+    if app.show_config {
+        let area = f.area();
+        f.render_widget(Clear, area);
+        let block = Block::default()
+            .title(" Configuration ")
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::Cyan));
+        let inner = block.inner(area);
+        f.render_widget(block, area);
+        let chunks = Layout::vertical([Constraint::Min(0), Constraint::Length(2)]).split(inner);
+        let health = app
+            .config
+            .validate_paths()
+            .err()
+            .map(|e| e.to_string())
+            .unwrap_or_else(|| "Site and content directory valid".to_string());
+        let text = format!("{}\n{}\nActive site: {}\nSite root: {}\nContent directory: {}\nEditor: {}\nConfig file: {}\n\nEdit site_path (legacy) or sites / active_site (multi-site). Use an existing site root; content_dir is relative to it. No site/content directories are created.\nEditor: config.editor > VISUAL > EDITOR > nano. For desktop editors use explicit wait flags, e.g. code --wait or open -W -a TextEdit. Return/close the editor to validate and reload. No shell expansion.\nCLI alternative: textorium use <path>; textorium sites add <path>. Save/revert post edits before config edit/reload.",
+            app.config_notice, health, app.config.site_name,
+            if app.config.site_path.is_empty() { "(not configured)" } else { &app.config.site_path },
+            app.config.content_path().display(), editor::preferred(app.config.editor.as_deref()),
+            Config::config_path().map(|p| p.display().to_string()).unwrap_or_else(|e| e.to_string()));
+        // Clamp scroll to the actual wrapped paragraph, including on resize.
+        let paragraph = Paragraph::new(text).wrap(Wrap { trim: false });
+        let max_scroll = paragraph
+            .line_count(chunks[0].width)
+            .saturating_sub(chunks[0].height as usize)
+            .min(u16::MAX as usize) as u16;
+        app.config_scroll = app.config_scroll.min(max_scroll);
+        f.render_widget(paragraph.scroll((app.config_scroll, 0)), chunks[0]);
+        f.render_widget(
+            Paragraph::new("e:edit r:reload\nEsc:close j/k:scroll"),
+            chunks[1],
+        );
+    }
+
     // Help overlay
     if app.show_help {
         let area = f.area();
@@ -1541,6 +1665,7 @@ fn ui(f: &mut Frame, app: &mut App) {
                 "Global",
                 Style::default().add_modifier(Modifier::BOLD),
             )),
+            Line::from("  ,             Configuration (e: edit, r: reload)"),
             Line::from("  ?             Toggle this help"),
             Line::from("  q             Quit (confirms if unsaved)"),
             Line::from("  Ctrl+S        Save all changes"),
@@ -1578,7 +1703,7 @@ fn ui(f: &mut Frame, app: &mut App) {
                 Style::default().add_modifier(Modifier::BOLD),
             )),
             Line::from("  j / k         Scroll up/down"),
-            Line::from("  Enter         Open in $EDITOR"),
+            Line::from("  Enter         Open in preferred editor"),
             Line::from("  Q             Apply smart quotes"),
         ];
 
@@ -1605,15 +1730,15 @@ pub fn run() -> Result<()> {
         original_hook(panic_info);
     }));
 
+    // Load before touching terminal; cleanup covers every later early return.
+    let mut app = App::new()?;
+    let _cleanup = TerminalCleanup;
     // Setup terminal
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
-
-    // Create app state
-    let mut app = App::new()?;
 
     // Main loop
     loop {
@@ -1625,6 +1750,33 @@ pub fn run() -> Result<()> {
             if app.show_help {
                 match key.code {
                     KeyCode::Char('?') | KeyCode::Esc => app.show_help = false,
+                    _ => {}
+                }
+                continue;
+            }
+
+            if app.show_config {
+                match key.code {
+                    KeyCode::Esc | KeyCode::Char(',') => app.show_config = false,
+                    KeyCode::Char('?') => app.show_help = true,
+                    KeyCode::Char('j') | KeyCode::Down => {
+                        app.config_scroll = app.config_scroll.saturating_add(1)
+                    }
+                    KeyCode::Char('k') | KeyCode::Up => {
+                        app.config_scroll = app.config_scroll.saturating_sub(1)
+                    }
+                    KeyCode::Char('e') | KeyCode::Enter | KeyCode::Char('r') => {
+                        let result = if key.code == KeyCode::Char('r') {
+                            Config::config_path().and_then(|path| app.reload_configuration(&path))
+                        } else {
+                            app.edit_configuration()
+                        };
+                        if let Err(error) = result {
+                            app.config_notice = format!("Config change failed; active state retained. {error:#}. Press e to re-edit.");
+                        }
+                        app.config_scroll = 0;
+                        terminal.clear()?;
+                    }
                     _ => {}
                 }
                 continue;
@@ -2339,6 +2491,10 @@ pub fn run() -> Result<()> {
                             }
                         }
                     }
+                    KeyCode::Char(',') => {
+                        app.show_config = true;
+                        app.config_scroll = 0;
+                    }
                     KeyCode::Char('?') => {
                         app.show_help = true;
                     }
@@ -2484,6 +2640,7 @@ mod tests {
     use std::path::PathBuf;
     use tempfile::NamedTempFile;
     include!("app_safety_tests.rs");
+    include!("config_tests.rs");
 
     fn make_post(
         title: &str,
@@ -2545,6 +2702,9 @@ mod tests {
             filtered_indices: Vec::new(),
             filter_dirty: true,
             show_help: false,
+            show_config: false,
+            config_scroll: 0,
+            config_notice: String::new(),
             cached_dirty_count: 0,
             cached_visual_lines: 0,
             visual_lines_post_idx: None,

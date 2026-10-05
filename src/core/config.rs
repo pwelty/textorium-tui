@@ -75,11 +75,10 @@ impl Default for Config {
 
 impl Config {
     /// Get the config file path
-    fn config_path() -> Result<PathBuf> {
+    pub fn config_path() -> Result<PathBuf> {
         // Use ~/.config/textorium to match Python version
         let home = std::env::var("HOME").context("Could not determine home directory")?;
         let config_dir = PathBuf::from(home).join(".config").join("textorium");
-        fs::create_dir_all(&config_dir)?;
         Ok(config_dir.join("config.json"))
     }
 
@@ -96,7 +95,7 @@ impl Config {
         Self::load_from_file(&path)
     }
 
-    fn load_from_file(path: &Path) -> Result<Self> {
+    pub fn load_from_file(path: &Path) -> Result<Self> {
         if !path.exists() {
             return Ok(Self::default());
         }
@@ -122,6 +121,7 @@ impl Config {
     /// (or creates a new single-site multi-site config).
     pub fn save(&self) -> Result<()> {
         let path = Self::config_path()?;
+        fs::create_dir_all(path.parent().context("Config has no parent")?)?;
         self.save_to_file(&path)
     }
 
@@ -202,6 +202,46 @@ impl Config {
 
         let content = serde_json::to_string_pretty(&multi)?;
         fs::write(path, content).context("Failed to write config file")?;
+        Ok(())
+    }
+
+    /// Refuse unconfigured/missing roots without creating site or content directories.
+    pub fn validate_paths(&self) -> Result<()> {
+        if self.site_path.trim().is_empty() {
+            anyhow::bail!(
+                "No site configured. Press , for configuration or run: textorium use <path>"
+            );
+        }
+        if !Path::new(&self.site_path).is_dir() {
+            anyhow::bail!("Site path not found or not a directory: {}", self.site_path);
+        }
+        if self.content_dir.trim().is_empty() || !self.content_path().is_dir() {
+            anyhow::bail!(
+                "Content directory not found or not a directory: {}",
+                self.content_path().display()
+            );
+        }
+        Ok(())
+    }
+
+    /// Create an editable first-run scaffold exclusively; never overwrite existing bytes.
+    pub fn ensure_editable_file(path: &Path) -> Result<()> {
+        use std::io::Write;
+        if path.exists() {
+            return Ok(());
+        }
+        fs::create_dir_all(path.parent().context("Config has no parent")?)?;
+        match fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(path)
+        {
+            Ok(mut file) => {
+                file.write_all(serde_json::to_string_pretty(&Self::default())?.as_bytes())?
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(e) => return Err(e).context("Could not create config scaffold"),
+        }
         Ok(())
     }
 
@@ -350,17 +390,20 @@ fn detect_content_dir(path: &str, ssg: &SsgType) -> String {
 }
 
 impl MultiSiteConfig {
-    /// Return the active site as a `Config`, or an empty default if not found.
+    /// Return the active site or an unconfigured view for an empty registry.
+    /// An unmatched active name is an error, never a fallback to another site.
     pub fn active_config(&self) -> Result<Config> {
         if self.sites.is_empty() {
-            return Ok(Config::default());
+            return Ok(Config {
+                editor: self.editor.clone(),
+                ..Config::default()
+            });
         }
         let entry = self
             .sites
             .iter()
             .find(|s| s.name == self.active_site)
-            .or_else(|| self.sites.first())
-            .unwrap(); // safe: not empty
+            .context("Active site not found in sites; correct active_site in configuration")?;
         Ok(Config {
             site_name: entry.name.clone(),
             site_path: entry.path.clone(),
@@ -383,7 +426,7 @@ impl MultiSiteConfig {
         Self::load_from_file(&path)
     }
 
-    fn load_from_file(path: &Path) -> Result<Self> {
+    pub fn load_from_file(path: &Path) -> Result<Self> {
         if !path.exists() {
             return Ok(Self {
                 sites: Vec::new(),
@@ -431,6 +474,7 @@ impl MultiSiteConfig {
 
     fn save(&self) -> Result<()> {
         let path = Config::config_path()?;
+        fs::create_dir_all(path.parent().context("Config has no parent")?)?;
         self.save_to_path(&path)
     }
 
@@ -602,7 +646,8 @@ fn build_site_config(path: &str) -> Result<Config> {
         site_path: path_str,
         content_dir,
         ssg,
-        editor: std::env::var("EDITOR").ok(),
+        // Environment preferences are resolved at launch, not pinned by `use`.
+        editor: None,
         server_url: None,
     })
 }
