@@ -1,6 +1,7 @@
 name: Release
 
 on:
+  workflow_dispatch:
   push:
     tags:
       - 'v*'
@@ -10,6 +11,7 @@ permissions:
 
 jobs:
   build:
+    if: github.event_name == 'push'
     strategy:
       matrix:
         include:
@@ -83,7 +85,8 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: pwelty/homebrew-tap
-          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          ssh-key: ${{ secrets.HOMEBREW_TAP_SSH_KEY }}
+          ssh-strict: true
 
       - name: Update formula
         env:
@@ -125,5 +128,38 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add Formula/textorium.rb
+          if git diff --cached --quiet; then
+            echo "Formula already current; no commit or push needed"
+            exit 0
+          fi
           git commit -m "textorium ${VERSION}"
           git push
+
+  verify-tap-access:
+    # Manual dispatch verifies credentials only: no builds, releases, or formula edits.
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      PROBE_REF: refs/heads/automation/textorium-auth-probe-${{ github.run_id }}-${{ github.run_attempt }}
+    steps:
+      - name: Checkout homebrew-tap
+        uses: actions/checkout@v4
+        with:
+          repository: pwelty/homebrew-tap
+          ssh-key: ${{ secrets.HOMEBREW_TAP_SSH_KEY }}
+          ssh-strict: true
+      - name: Verify repository write access without changing main
+        id: probe
+        run: |
+          test -z "$(git ls-remote --heads origin "$PROBE_REF")"
+          git push --force-with-lease="$PROBE_REF:" origin "HEAD:$PROBE_REF"
+          test "$(git ls-remote --heads origin "$PROBE_REF" | cut -f1)" = "$(git rev-parse HEAD)"
+      - name: Remove and verify absence of probe branch
+        if: always() && steps.probe.outcome != 'skipped'
+        run: |
+          if test -n "$(git ls-remote --heads origin "$PROBE_REF")"; then
+            git push --force-with-lease="$PROBE_REF:$(git rev-parse HEAD)" origin ":$PROBE_REF"
+          fi
+          test -z "$(git ls-remote --heads origin "$PROBE_REF")"
