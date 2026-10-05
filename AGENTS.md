@@ -22,7 +22,7 @@ src/
 └── tui/app.rs           # Three-pane UI, input, state, batch operations
 ```
 
-- No subcommand launches the synchronous ratatui/crossterm TUI.
+- No subcommand launches the synchronous ratatui/crossterm TUI. Comma opens configuration; edit/reload uses the preferred external editor and validates before replacing state. Run `tests/config_smoke.py` alongside the safety smoke using a disposable receipt directory.
 - Config is `~/.config/textorium/config.json`; multi-site format supports an active site and editor preference, with legacy flat-config compatibility.
 - Posts on disk are the source of truth; no database or persistent post cache. All metadata/body/batch edits are in memory until Ctrl+S. Refresh refuses dirty posts; batch undo stages field-only inverse changes and never writes disk.
 - YAML frontmatter uses `serde_yaml`; TOML uses `toml`. Preserve current dependencies unless separately authorized.

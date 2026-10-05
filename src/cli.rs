@@ -176,14 +176,8 @@ pub fn run(cli: Cli) -> Result<()> {
             println!("{}", path.display());
 
             if !no_edit {
-                let editor = config
-                    .editor
-                    .or_else(|| std::env::var("EDITOR").ok())
-                    .unwrap_or_else(|| "vi".to_string());
-                std::process::Command::new(&editor)
-                    .arg(&path)
-                    .status()
-                    .with_context(|| format!("Failed to open editor: {}", editor))?;
+                let editor = crate::core::editor::preferred(config.editor.as_deref());
+                crate::core::editor::run(&crate::core::editor::arguments(&editor)?, &path)?;
             }
         }
         Some(Commands::Templates { action }) => {
@@ -252,9 +246,7 @@ pub fn run(cli: Cli) -> Result<()> {
             json,
         }) => {
             let config = crate::core::config::Config::load()?;
-            if config.site_path.is_empty() {
-                anyhow::bail!("No site configured. Run: textorium use <path>");
-            }
+            config.validate_paths()?;
 
             let result = crate::core::posts::scan_posts(&config)?;
 

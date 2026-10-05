@@ -43,3 +43,6 @@ jobs:
 
       - name: Build
         run: cargo build
+
+      - name: Configuration PTY and CLI acceptance
+        run: python3 tests/config_smoke.py "$PWD/target/debug/textorium" "$RUNNER_TEMP/textorium-config-smoke"

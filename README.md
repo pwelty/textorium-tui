@@ -51,7 +51,8 @@ Three-pane layout: posts table (left), metadata editor (top-right), content prev
 - Per-post revert for unsaved changes
 - YAML and TOML frontmatter support
 - Unsaved changes indicator and quit confirmation
-- External editor integration (`$EDITOR`)
+- Preferred external editor integration (`config.editor` → `VISUAL` → `EDITOR` → `nano`)
+- In-app configuration view (`,`) with safe edit/reload
 - Browser preview (auto-detects dev server URL)
 - Draft filter toggle
 - Save changes directly to markdown files (`Ctrl+S`)
@@ -93,12 +94,54 @@ Synthetic verification: `cargo test --locked` and the stdlib-only real PTY/CLI s
 | `o` | Open in browser |
 | `Q` | Smart quotes (curly quotes, em dashes, ellipses) |
 | `r` | Refresh posts |
+| `,` | Configuration: `e`/Enter edits, `r` reloads, `j`/`k` scroll, Esc closes |
 | `?` | Help overlay |
 | `q` / `Ctrl+C` | Quit (confirms if unsaved changes) |
 | `S` | Switch registered site |
 | `n` | New post / template picker |
 | `F` / `x` | Build property filter / clear property filters |
 | `Space` / `Ctrl+A` / `b` | Toggle marked post (posts pane) / toggle all filtered marks / batch operations |
+
+### Configuration and empty-state recovery (current source; unreleased)
+
+Press **`,`** from any pane to see the active site/root, content directory,
+preferred editor, and `~/.config/textorium/config.json`. The footer advertises
+comma/help even in narrow terminals. The view scrolls and keeps its edit/close
+controls visible. Press **`e`** (or Enter) to edit the actual JSON file; **`r`**
+validates and reloads an independently edited file. Esc closes the view.
+
+On first edit, an absent file gets a legacy-format scaffold with an **empty
+`site_path`**: enter an existing site root and its relative `content_dir`.
+Textorium does not guess paths or create site/content directories. Both legacy
+flat and multi-site JSON are accepted. Malformed startup config remains editable.
+Invalid JSON, missing roots/content directories, or an unmatched `active_site`
+are reported; reload retains the previous working collection. Save or revert
+all unsaved post edits before configuration edit/reload. External edits are
+written by your editor, not by Ctrl+S; no JSON reserialization occurs, so unknown
+fields remain intact. A failed/nonzero editor does not trigger reload, even if
+it already wrote the file; re-edit or explicitly reload when ready.
+
+Editor precedence is a nonblank `editor` in config, then `VISUAL`, then `EDITOR`,
+then `nano`. Commands accept literal quoted arguments and backslash escapes,
+**not shell expansion** (`~`, `$HOME`, pipes, or substitutions). Terminal editors
+use the same terminal. Desktop editors must be invoked with their explicit wait
+option, for example `"editor": "code --wait"` or
+`"editor": "open -W -a TextEdit"` on macOS. Close/return from the editor to reload.
+A path containing spaces can be quoted inside JSON, e.g.
+`"editor": "\"/path/to/editor with spaces\" --wait"`.
+
+Unconfigured/missing-site/missing-content states differ from a valid empty site
+and from search/draft/property filters with no matches. `textorium list` and
+`list --json` return nonzero with a diagnostic on stderr and **no stdout** for
+invalid JSON or unconfigured/missing roots. A valid empty collection (or filters
+with no matches) returns exit 0; `--json` emits `[]`. Individual post parse errors
+retain the existing skip-with-stderr-warning behavior.
+
+Run the additional stdlib-only synthetic acceptance suite:
+`python3 tests/config_smoke.py /absolute/path/to/textorium /new/receipt-directory`.
+It exercises real PTY comma/edit/reload, first-run/stale/malformed configs,
+preferred-editor argv, failure restoration, dirty guards, empty states, and
+40×12 layout. It uses a synthetic blocking editor, never a GUI or real content.
 
 ## CLI commands
 
