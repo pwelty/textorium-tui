@@ -287,7 +287,11 @@ def main():
             s.wait('Configuration')
             check('narrow fixed edit and escape actions', 'e:edit r:reload' in s.screen.text() and 'Esc:close' in s.screen.text())
             s.snapshot('narrow-top')
-            for _ in range(25): s.key(b'j')
+            # Paths include the caller's receipt root; do not assume a fixed wrapped height.
+            for _ in range(100):
+                if 'CLI alternative' in s.screen.text() or 'textorium sites' in s.screen.text():
+                    break
+                s.key(b'j')
             check('narrow scroll reaches setup details', 'CLI alternative' in s.screen.text() or 'textorium sites' in s.screen.text())
             s.snapshot('narrow-scrolled')
             s.key(b'?')
